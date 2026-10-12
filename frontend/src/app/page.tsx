@@ -744,23 +744,36 @@ function DataMiningPanel({ report }: { report: any }) {
 function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: number; onSeek?: (sec: number) => void }) {
   const { claim, verdict } = item;
   const [tab, setTab] = useState<'verdict' | 'searches' | 'evidence' | 'ai_chain'>('verdict');
-  const pct = Math.round(verdict.confidence * 100);
-  const s = verdict.fact_check_summary;
-  const vColor = VERDICT_COLOR[verdict.label];
+  const pct = Math.round((verdict?.confidence ?? 0.5) * 100);
+  const s = verdict?.fact_check_summary || {
+    searches_run: verdict?.search_runs?.length || 1,
+    sources_found: verdict?.evidence?.length || 0,
+    sources_accepted: verdict?.evidence?.length || 0,
+    sources_blocked: 0,
+    consensus_score: verdict?.confidence ?? 0.5,
+    cross_platform_hits: 0,
+    llm_rounds: verdict?.llm_checks?.length || 1,
+    critic_rejections: 0,
+  };
+  const vColor = (verdict?.label && VERDICT_COLOR[verdict.label]) || 'var(--text-muted)';
 
-  const timeStr = (claim as any).time_str || (
-    claim.timestamp_in_video != null
+  const timeStr = (claim as any)?.time_str || (
+    claim?.timestamp_in_video != null
       ? `${String(Math.floor(claim.timestamp_in_video / 60)).padStart(2, '0')}:${String(Math.floor(claim.timestamp_in_video % 60)).padStart(2, '0')}`
       : null
   );
-  const timeSec = claim.timestamp_in_video != null
+  const timeSec = claim?.timestamp_in_video != null
     ? claim.timestamp_in_video
-    : (claim as any).time_str
+    : (claim as any)?.time_str
       ? (() => {
           const parts = (claim as any).time_str.split(':').map(Number);
           return parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
         })()
       : null;
+
+  const searchRuns = verdict?.search_runs || [];
+  const evidenceList = verdict?.evidence || [];
+  const llmChecks = verdict?.llm_checks || [];
 
   return (
     <div className="glass claim-card" style={{ animationDelay: `${index * 120}ms` }}>
@@ -790,7 +803,7 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
         </div>
       </div>
 
-      {(verdict as any).context && (
+      {(verdict as any)?.context && (
         <div style={{ background: 'rgba(59,158,255,0.04)', border: '1px solid rgba(59,158,255,0.1)', borderRadius: '10px', padding: '0.6rem 0.85rem', marginBottom: '0.9rem' }}>
           <p style={{ fontSize: '0.68rem', color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.2rem' }}>From Transcript</p>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>"{(verdict as any).context}"</p>
@@ -808,12 +821,12 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
 
       <div className="scorecard" style={{ marginBottom: '1.1rem' }}>
         {[
-          ['Searches Run', s.searches_run, ''],
-          ['Sources Found', s.sources_found, ''],
-          ['Accepted', s.sources_accepted, 'good'],
-          ['Blocked', s.sources_blocked, s.sources_blocked > 0 ? 'bad' : ''],
-          ['Consensus', `${Math.round(s.consensus_score * 100)}%`, s.consensus_score >= 0.8 ? 'good' : s.consensus_score >= 0.6 ? 'warn' : 'bad'],
-          ['AI Rounds', s.llm_rounds, ''],
+          ['Searches Run', s.searches_run ?? (searchRuns.length || 1), ''],
+          ['Sources Found', s.sources_found ?? evidenceList.length, ''],
+          ['Accepted', s.sources_accepted ?? evidenceList.length, 'good'],
+          ['Blocked', s.sources_blocked ?? 0, (s.sources_blocked ?? 0) > 0 ? 'bad' : ''],
+          ['Consensus', `${Math.round(((s.consensus_score ?? verdict?.confidence ?? 0.5) * 100))}%`, ((s.consensus_score ?? 0.5) >= 0.8) ? 'good' : ((s.consensus_score ?? 0.5) >= 0.6) ? 'warn' : 'bad'],
+          ['AI Rounds', s.llm_rounds ?? (llmChecks.length || 1), ''],
         ].map(([label, val, cls]) => (
           <div key={label as string} className="score-cell">
             <div className="score-label">{label}</div>
@@ -833,49 +846,58 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
       <div className="tab-bar">
         {(['verdict', 'searches', 'evidence', 'ai_chain'] as const).map(t => (
           <button key={t} className={`tab-btn${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
-            {{ verdict: 'Reasoning', searches: `Searches (${s.searches_run})`, evidence: `Evidence (${verdict.evidence.length})`, ai_chain: 'AI Chain' }[t]}
+            {{
+              verdict: 'Reasoning',
+              searches: `Searches (${searchRuns.length || s.searches_run || 1})`,
+              evidence: `Evidence (${evidenceList.length})`,
+              ai_chain: 'AI Chain'
+            }[t]}
           </button>
         ))}
       </div>
 
       {tab === 'verdict' && (
         <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.7, borderLeft: '2px solid var(--border-active)', paddingLeft: '0.85rem' }}>
-          {verdict.reasoning || 'No detailed reasoning available.'}
+          {verdict?.reasoning || 'No detailed reasoning available.'}
         </p>
       )}
 
       {tab === 'searches' && (
         <div style={{ overflowX: 'auto' }}>
-          <table className="search-table">
-            <thead><tr><th>#</th><th>Query</th><th>Source</th><th>Results</th><th>Domain</th><th>Trust</th><th>Stance</th></tr></thead>
-            <tbody>
-              {verdict.search_runs.map((run, i) => (
-                <tr key={i}>
-                  <td style={{ color: 'var(--text-muted)', fontWeight: 700 }}>#{i + 1}</td>
-                  <td><span className="query-mono">{run.query}</span></td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{run.source_type}</td>
-                  <td><span className="results-count">{run.results_found}</span></td>
-                  <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{run.top_domain}</td>
-                  <td><span className={`trust-pill trust-${run.trust_level}`}>{TRUST_LABEL[run.trust_level as DomainTrust]}</span></td>
-                  <td><span className={`stance-pill stance-${run.stance}`}>{run.stance}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {searchRuns.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem' }}>No search queries recorded for this claim.</p>
+          ) : (
+            <table className="search-table">
+              <thead><tr><th>#</th><th>Query</th><th>Source</th><th>Results</th><th>Domain</th><th>Trust</th><th>Stance</th></tr></thead>
+              <tbody>
+                {searchRuns.map((run, i) => (
+                  <tr key={i}>
+                    <td style={{ color: 'var(--text-muted)', fontWeight: 700 }}>#{i + 1}</td>
+                    <td><span className="query-mono">{run.query}</span></td>
+                    <td style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{run.source_type}</td>
+                    <td><span className="results-count">{run.results_found}</span></td>
+                    <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{run.top_domain}</td>
+                    <td><span className={`trust-pill trust-${run.trust_level}`}>{TRUST_LABEL[run.trust_level as DomainTrust] || run.trust_level}</span></td>
+                    <td><span className={`stance-pill stance-${run.stance}`}>{run.stance}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
       {tab === 'evidence' && (
         <div>
-          {verdict.evidence.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No web evidence found for this claim.</p>
-          ) : verdict.evidence.map((ev, i) => {
-            const relPct = Math.round(ev.relevance_score * 100);
-            const relColor = ev.relevance_score >= 0.85 ? '#059669' : ev.relevance_score >= 0.65 ? '#d97706' : '#64748b';
+          {evidenceList.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem' }}>No web evidence found for this claim.</p>
+          ) : evidenceList.map((ev, i) => {
+            const relPct = Math.round((ev.relevance_score ?? 0.8) * 100);
+            const relColor = (ev.relevance_score ?? 0.8) >= 0.85 ? '#059669' : (ev.relevance_score ?? 0.8) >= 0.65 ? '#d97706' : '#64748b';
             return (
               <div key={i} className="ev-card">
                 <div className="ev-meta">
-                  <span className={`trust-pill trust-${ev.domain_trust}`}>{TRUST_LABEL[ev.domain_trust]}</span>
+                  <span className={`trust-pill trust-${ev.domain_trust}`}>{TRUST_LABEL[ev.domain_trust] || ev.domain_trust}</span>
                   <span className="ev-domain">📍 {ev.domain}</span>
                   <span className="ev-date">📅 {ev.publication_date}</span>
                 </div>
@@ -909,7 +931,9 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
 
       {tab === 'ai_chain' && (
         <div className="agent-chain">
-          {verdict.llm_checks.map((check, i) => (
+          {llmChecks.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem' }}>No AI chain steps recorded.</p>
+          ) : llmChecks.map((check, i) => (
             <div key={i} className="agent-step">
               <div className="agent-left">
                 <div className={`agent-icon ${check.passed ? 'pass' : 'fail'}`}>{check.passed ? '✓' : '↩'}</div>
@@ -1585,44 +1609,44 @@ export default function Home() {
                 >
                   All ({realClaims.length})
                 </button>
-                {realClaims.filter(c => c.verdict.label === 'true').length > 0 && (
+                {realClaims.filter(c => c.verdict?.label === 'true').length > 0 && (
                   <button
                     type="button"
                     className={`filter-pill${claimFilter === 'true' ? ' active' : ''}`}
                     onClick={() => setClaimFilter('true')}
                     style={claimFilter === 'true' ? { background: 'rgba(16,185,129,0.25)', borderColor: '#10b981', color: '#10b981' } : {}}
                   >
-                    ✓ True ({realClaims.filter(c => c.verdict.label === 'true').length})
+                    ✓ True ({realClaims.filter(c => c.verdict?.label === 'true').length})
                   </button>
                 )}
-                {realClaims.filter(c => c.verdict.label === 'false').length > 0 && (
+                {realClaims.filter(c => c.verdict?.label === 'false').length > 0 && (
                   <button
                     type="button"
                     className={`filter-pill${claimFilter === 'false' ? ' active' : ''}`}
                     onClick={() => setClaimFilter('false')}
                     style={claimFilter === 'false' ? { background: 'rgba(239,68,68,0.25)', borderColor: '#ef4444', color: '#ef4444' } : {}}
                   >
-                    ✗ False ({realClaims.filter(c => c.verdict.label === 'false').length})
+                    ✗ False ({realClaims.filter(c => c.verdict?.label === 'false').length})
                   </button>
                 )}
-                {realClaims.filter(c => c.verdict.label === 'misleading').length > 0 && (
+                {realClaims.filter(c => c.verdict?.label === 'misleading').length > 0 && (
                   <button
                     type="button"
                     className={`filter-pill${claimFilter === 'misleading' ? ' active' : ''}`}
                     onClick={() => setClaimFilter('misleading')}
                     style={claimFilter === 'misleading' ? { background: 'rgba(245,158,11,0.25)', borderColor: '#f59e0b', color: '#f59e0b' } : {}}
                   >
-                    ⚠ Misleading ({realClaims.filter(c => c.verdict.label === 'misleading').length})
+                    ⚠ Misleading ({realClaims.filter(c => c.verdict?.label === 'misleading').length})
                   </button>
                 )}
-                {realClaims.filter(c => c.verdict.label === 'unverifiable').length > 0 && (
+                {realClaims.filter(c => c.verdict?.label === 'unverifiable').length > 0 && (
                   <button
                     type="button"
                     className={`filter-pill${claimFilter === 'unverifiable' ? ' active' : ''}`}
                     onClick={() => setClaimFilter('unverifiable')}
                     style={claimFilter === 'unverifiable' ? { background: 'rgba(100,116,139,0.25)', borderColor: '#64748b', color: '#94a3b8' } : {}}
                   >
-                    ? Unverified ({realClaims.filter(c => c.verdict.label === 'unverifiable').length})
+                    ? Unverified ({realClaims.filter(c => c.verdict?.label === 'unverifiable').length})
                   </button>
                 )}
               </div>
@@ -1631,14 +1655,14 @@ export default function Home() {
 
           {(() => {
             const filtered = realClaims.filter(item => {
-              if (claimFilter !== 'all' && item.verdict.label !== claimFilter) return false;
+              if (claimFilter !== 'all' && item.verdict?.label !== claimFilter) return false;
               if (claimSearch.trim()) {
                 const q = claimSearch.toLowerCase();
-                const textMatch = item.claim.normalized_text?.toLowerCase().includes(q) ||
-                                  item.claim.raw_text?.toLowerCase().includes(q);
-                const reasoningMatch = item.verdict.reasoning?.toLowerCase().includes(q) ||
-                                       item.verdict.summary?.toLowerCase().includes(q);
-                const sourceMatch = item.verdict.evidence?.some(e =>
+                const textMatch = item.claim?.normalized_text?.toLowerCase().includes(q) ||
+                                  item.claim?.raw_text?.toLowerCase().includes(q);
+                const reasoningMatch = item.verdict?.reasoning?.toLowerCase().includes(q) ||
+                                       item.verdict?.summary?.toLowerCase().includes(q);
+                const sourceMatch = item.verdict?.evidence?.some(e =>
                   e.source_title?.toLowerCase().includes(q) || e.domain?.toLowerCase().includes(q)
                 );
                 return Boolean(textMatch || reasoningMatch || sourceMatch);

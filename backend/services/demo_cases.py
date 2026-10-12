@@ -89,7 +89,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     "llm_checks": [
                         {"agent": "Forensic Voice Classifier", "role": "Acoustic Biomarkers", "finding": "Synthetic pitch jitter > 8.4 st. Match with RVC voice cloning model.", "passed": False},
                         {"agent": "IFCN Cross-Check", "role": "FactCheck Verification", "finding": "Certified false by Reuters and FactCheck.org.", "passed": False}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 2,
+                        "sources_accepted": 2,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.98,
+                        "cross_platform_hits": 4,
+                        "llm_rounds": 2,
+                        "critic_rejections": 0
+                    }
                 }
             },
             {
@@ -124,7 +134,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     ],
                     "llm_checks": [
                         {"agent": "Entity Validator", "role": "Government Record Verification", "finding": "No such platform or executive order exists.", "passed": False}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 1,
+                        "sources_accepted": 1,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.96,
+                        "cross_platform_hits": 2,
+                        "llm_rounds": 1,
+                        "critic_rejections": 0
+                    }
                 }
             }
         ],
@@ -276,7 +296,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     ],
                     "llm_checks": [
                         {"agent": "Genomics Verification", "role": "Peer-Reviewed Literature", "finding": "Confirmed by PNAS 2021 publication.", "passed": True}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 2,
+                        "sources_accepted": 2,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.91,
+                        "cross_platform_hits": 3,
+                        "llm_rounds": 1,
+                        "critic_rejections": 0
+                    }
                 }
             },
             {
@@ -311,7 +341,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     ],
                     "llm_checks": [
                         {"agent": "Psychology Corpus Check", "role": "Empirical Review", "finding": "Consistent with published Anthrozoös findings.", "passed": True}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 1,
+                        "sources_accepted": 1,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.88,
+                        "cross_platform_hits": 1,
+                        "llm_rounds": 1,
+                        "critic_rejections": 0
+                    }
                 }
             },
             {
@@ -346,7 +386,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     ],
                     "llm_checks": [
                         {"agent": "Medical Nuance Engine", "role": "Biochemical Precision", "finding": "Sensationalized phrasing of physiological cellular autophagy.", "passed": False}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 1,
+                        "sources_accepted": 1,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.84,
+                        "cross_platform_hits": 2,
+                        "llm_rounds": 1,
+                        "critic_rejections": 0
+                    }
                 }
             }
         ],
@@ -480,7 +530,17 @@ DEMO_CASES: Dict[str, Dict[str, Any]] = {
                     ],
                     "llm_checks": [
                         {"agent": "Reverse Video Forensics", "role": "Visual Matcher", "finding": "100% texture match with Bohemia Interactive simulator asset library.", "passed": False}
-                    ]
+                    ],
+                    "fact_check_summary": {
+                        "searches_run": 1,
+                        "sources_found": 2,
+                        "sources_accepted": 2,
+                        "sources_blocked": 0,
+                        "consensus_score": 0.99,
+                        "cross_platform_hits": 5,
+                        "llm_rounds": 1,
+                        "critic_rejections": 0
+                    }
                 }
             }
         ],
