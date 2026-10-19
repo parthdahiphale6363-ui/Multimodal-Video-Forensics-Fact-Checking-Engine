@@ -138,4 +138,7 @@ def build_claim_verdicts_for_segments(video_url: str, segments: list, detected_l
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    reload = os.environ.get("ENVIRONMENT", "").lower() == "development"
+    app_target = "backend.main:app" if os.path.exists("backend") else "main:app"
+    uvicorn.run(app_target, host="0.0.0.0", port=port, reload=reload)
