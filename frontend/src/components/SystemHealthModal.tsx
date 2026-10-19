@@ -17,21 +17,35 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
     setLoading(true);
     setFetchError(null);
     const start = performance.now();
-    try {
-      const res = await fetch('/api/jobs/health');
-      if (res.ok) {
-        const data = await res.json();
-        setHealthData(data);
-      } else {
-        setFetchError(`Backend returned status ${res.status}`);
+    const publicBackend = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/$/, '');
+    const targets = publicBackend
+      ? [`${publicBackend}/jobs/health`, '/api/jobs/health']
+      : ['/api/jobs/health'];
+
+    let succeeded = false;
+    let lastError = '';
+
+    for (const url of targets) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          setHealthData(data);
+          succeeded = true;
+          break;
+        } else {
+          lastError = `Backend returned status ${res.status}`;
+        }
+      } catch (e: any) {
+        lastError = e.message || 'Connection refused';
       }
-    } catch (e: any) {
-      console.error(e);
-      setFetchError(e.message || 'Failed to connect to backend on port 8000');
-    } finally {
-      setLatency(Math.round(performance.now() - start));
-      setLoading(false);
     }
+
+    if (!succeeded) {
+      setFetchError(lastError || 'Unable to connect to backend service');
+    }
+    setLatency(Math.round(performance.now() - start));
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -180,7 +194,7 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               color: '#f87171',
               fontSize: '0.8rem',
             }}>
-              ⚠️ {fetchError}. Ensure FastAPI backend is running on http://127.0.0.1:8000.
+              ⚠️ {fetchError}. Ensure the FastAPI backend is running and BACKEND_URL is configured.
             </div>
           )}
 
