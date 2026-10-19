@@ -1,70 +1,92 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-function getBackendUrl(): string {
-  // 1. Explicit backend environment variables
-  if (process.env.BACKEND_URL) {
-    return process.env.BACKEND_URL.trim().replace(/\/$/, '');
-  }
-  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
-    return process.env.NEXT_PUBLIC_BACKEND_URL.trim().replace(/\/$/, '');
-  }
-  // 2. Railway internal private network address
-  if (process.env.RAILWAY_ENVIRONMENT) {
-    return 'http://multimodal-video-forensics-fact.railway.internal:8000';
-  }
-  // 3. Localhost fallback for local development
-  return 'http://127.0.0.1:8000';
+let _cachedWorkingBase: string | null = null;
+
+function getCandidateBases(): string[] {
+  const envUrls = [
+    process.env.BACKEND_URL,
+    process.env.NEXT_PUBLIC_BACKEND_URL,
+  ]
+    .filter((u): u is string => Boolean(u && u.trim()))
+    .map(u => u.trim().replace(/\/$/, ''));
+
+  const railwayInternalUrls = [
+    'http://multimodal-video-forensics-fact.railway.internal:8080',
+    'http://multimodal-video-forensics-fact.railway.internal:8000',
+    'http://multimodal-video-forensics-fact:8080',
+    'http://multimodal-video-forensics-fact:8000',
+  ];
+
+  const localUrls = [
+    'http://127.0.0.1:8000',
+    'http://127.0.0.1:8080',
+    'http://localhost:8000',
+  ];
+
+  const order = _cachedWorkingBase
+    ? [_cachedWorkingBase, ...envUrls, ...railwayInternalUrls, ...localUrls]
+    : [...envUrls, ...railwayInternalUrls, ...localUrls];
+
+  return Array.from(new Set(order));
 }
 
 async function handleProxy(req: NextRequest, params: { path?: string[] }) {
-  const backendBase = getBackendUrl();
   const pathSegments = params.path || [];
   const pathStr = pathSegments.join('/');
   const search = req.nextUrl.search || '';
-  const targetUrl = `${backendBase}/${pathStr}${search}`;
+  const candidates = getCandidateBases();
 
-  try {
-    const headers = new Headers();
-    req.headers.forEach((val, key) => {
-      // Don't forward host header to avoid SSL/SNI mismatch
-      if (!['host', 'content-length'].includes(key.toLowerCase())) {
-        headers.set(key, val);
-      }
-    });
+  const isBodyMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+  const rawBody = isBodyMethod ? await req.arrayBuffer() : undefined;
 
-    const isBodyMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
-    const body = isBodyMethod ? await req.arrayBuffer() : undefined;
+  const reqHeaders = new Headers();
+  req.headers.forEach((val, key) => {
+    if (!['host', 'content-length'].includes(key.toLowerCase())) {
+      reqHeaders.set(key, val);
+    }
+  });
 
-    const res = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body,
-      cache: 'no-store',
-    });
+  const triedErrors: Array<{ base: string; error: string }> = [];
 
-    const resBody = await res.arrayBuffer();
-    const resHeaders = new Headers();
-    res.headers.forEach((val, key) => {
-      if (!['content-encoding', 'transfer-encoding'].includes(key.toLowerCase())) {
-        resHeaders.set(key, val);
-      }
-    });
+  for (const base of candidates) {
+    const targetUrl = `${base}/${pathStr}${search}`;
+    try {
+      const res = await fetch(targetUrl, {
+        method: req.method,
+        headers: reqHeaders,
+        body: rawBody,
+        cache: 'no-store',
+      });
 
-    return new NextResponse(resBody, {
-      status: res.status,
-      headers: resHeaders,
-    });
-  } catch (err: any) {
-    return NextResponse.json(
-      {
-        error: 'Backend Proxy Error',
-        message: err.message,
-        targetUrl,
-        backendBase,
-      },
-      { status: 502 }
-    );
+      // If we got an HTTP response from the backend (even 4xx/5xx from FastAPI), network connected!
+      _cachedWorkingBase = base;
+
+      const resBody = await res.arrayBuffer();
+      const resHeaders = new Headers();
+      res.headers.forEach((val, key) => {
+        if (!['content-encoding', 'transfer-encoding'].includes(key.toLowerCase())) {
+          resHeaders.set(key, val);
+        }
+      });
+
+      return new NextResponse(resBody, {
+        status: res.status,
+        headers: resHeaders,
+      });
+    } catch (err: any) {
+      triedErrors.push({ base, error: err.message || 'Connection failed' });
+    }
   }
+
+  return NextResponse.json(
+    {
+      error: 'Backend Proxy Error',
+      message: 'Unable to connect to any backend candidate host',
+      tried: triedErrors,
+      path: pathStr,
+    },
+    { status: 502 }
+  );
 }
 
 export async function GET(req: NextRequest, context: { params: Promise<{ path?: string[] }> }) {

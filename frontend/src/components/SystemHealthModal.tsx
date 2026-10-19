@@ -34,7 +34,12 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
           succeeded = true;
           break;
         } else {
-          lastError = `Backend returned status ${res.status}`;
+          try {
+            const errJson = await res.json();
+            lastError = errJson.message || `Backend returned status ${res.status}`;
+          } catch {
+            lastError = `Backend returned status ${res.status}`;
+          }
         }
       } catch (e: any) {
         lastError = e.message || 'Connection refused';
