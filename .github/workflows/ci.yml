@@ -70,8 +70,8 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ./frontend
-        run: npm install
+        run: npm install --include=dev
 
       - name: Build Next.js Production Bundle
         working-directory: ./frontend
-        run: npm run build
+        run: npx next build --webpack
