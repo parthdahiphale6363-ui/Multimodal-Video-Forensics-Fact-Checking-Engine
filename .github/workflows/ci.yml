@@ -37,7 +37,17 @@ jobs:
 
       - name: Run Full Pytest Suite (Unit, Search, Forensics, Multimodal)
         run: |
-          python -m pytest tests/ -v
+          python -m pytest tests/ -v 2>&1 | tee /tmp/pytest.log
+
+      - name: Pytest Execution Summary
+        if: always()
+        run: |
+          echo "### Backend Pytest Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f /tmp/pytest.log ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 60 /tmp/pytest.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Run Forensics Validation
         run: |
@@ -74,4 +84,15 @@ jobs:
 
       - name: Build Next.js Production Bundle
         working-directory: ./frontend
-        run: npx next build --webpack
+        run: |
+          npm run build 2>&1 | tee /tmp/next_build.log
+
+      - name: Frontend Build Summary
+        if: always()
+        run: |
+          echo "### Frontend Next.js Build Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f /tmp/next_build.log ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 60 /tmp/next_build.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
