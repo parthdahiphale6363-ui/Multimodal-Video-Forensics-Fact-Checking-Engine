@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 from uuid import UUID, uuid4
@@ -26,5 +26,5 @@ class Claim(BaseModel):
     timestamp_in_video: float = Field(..., description="The starting timestamp of the claim in the video, in seconds")
     
     embedding_id: Optional[str] = Field(None, description="Reference to the vector store embedding. Nullable until computed.")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp when the claim was extracted")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the claim was extracted")
 

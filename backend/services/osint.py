@@ -80,7 +80,7 @@ def _ddg_search(query: str, max_results: int = 5, news: bool = False) -> List[Di
     condensed_q = " ".join(words[:6]) if words else clean_q[:50]
 
     def _do_search():
-        with DDGS() as ddgs:
+        with DDGS(timeout=4) as ddgs:
             raw = []
             if news:
                 try:
@@ -702,35 +702,86 @@ def run_osint_pipeline(
     date_refs = forensics_report.get("temporal_analysis", {}).get("date_references", [])
     years = forensics_report.get("temporal_analysis", {}).get("years_mentioned", [])
 
-    # Extract claims text
-    claims_text = [item["claim"].get("normalized_text", "") for item in claim_items]
+    # Extract claims text safely
+    claims_text = []
+    for item in claim_items:
+        if isinstance(item, dict):
+            if "claim" in item:
+                c = item["claim"]
+                if isinstance(c, dict):
+                    claims_text.append(c.get("normalized_text") or c.get("raw_text") or "")
+                else:
+                    claims_text.append(str(c))
+            elif "normalized_text" in item:
+                claims_text.append(item["normalized_text"])
+            elif "claim_text" in item:
+                claims_text.append(item["claim_text"])
+            else:
+                claims_text.append(str(item.get("claim", "")))
+        else:
+            claims_text.append(str(item))
+    claims_text = [c for c in claims_text if c]
+
     transcript_snippet = transcript[:300]
-
-    print("[osint] Querying Google Fact Check Tools API...")
-    google_factcheck = verify_via_google_factcheck(claims_text)
-
-    print("[osint] Collecting news verification...")
-    news = verify_via_news(claims_text, transcript_snippet)
-
-    print("[osint] Collecting social media signals...")
     topic = " ".join(transcript_snippet.split()[:6])
-    social = collect_social_signals(claims_text, topic)
 
-    print("[osint] Building reverse search queries...")
-    reverse = build_reverse_search_queries(video_url, transcript_snippet, all_locations)
+    print("[osint] Running OSINT sub-tasks concurrently...")
+    from concurrent.futures import ThreadPoolExecutor
 
-    print("[osint] Verifying geolocation...")
-    geo_verification = verify_geolocation(all_locations, claims_text) if all_locations else {
-        "geo_verifications": [], "geo_contradictions": [], "geo_contradiction_count": 0,
-        "geo_summary": "No geographic references to verify."
-    }
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        fut_gfc = executor.submit(verify_via_google_factcheck, claims_text)
+        fut_news = executor.submit(verify_via_news, claims_text, transcript_snippet)
+        fut_social = executor.submit(collect_social_signals, claims_text, topic)
+        fut_reverse = executor.submit(build_reverse_search_queries, video_url, transcript_snippet, all_locations)
+        fut_geo = executor.submit(verify_geolocation, all_locations, claims_text) if all_locations else None
+        fut_timestamp = executor.submit(verify_timestamps, date_refs, years, claims_text)
+        fut_weather = executor.submit(verify_weather_claims, transcript, all_locations, date_refs)
 
-    print("[osint] Verifying timestamps...")
-    timestamp = verify_timestamps(date_refs, years, claims_text)
+        try:
+            google_factcheck = fut_gfc.result(timeout=15)
+        except Exception as e:
+            print(f"[osint] Google Fact Check failed: {e}")
+            google_factcheck = {"fact_checks_found": [], "debunked_count": 0, "manipulated_count": 0, "verified_true_count": 0, "total_reviews": 0, "factcheck_summary": f"Error: {e}"}
 
-    print("[osint] Checking weather claims...")
-    weather = verify_weather_claims(transcript, all_locations, date_refs)
-    
+        try:
+            news = fut_news.result(timeout=20)
+        except Exception as e:
+            print(f"[osint] News verification failed: {e}")
+            news = {"news_results": [], "total_news_found": 0, "high_trust_sources": 0, "fact_check_sources": 0, "contradiction_count": 0, "support_count": 0, "groq_news_analysis": "", "news_summary": f"Error: {e}"}
+
+        try:
+            social = fut_social.result(timeout=15)
+        except Exception as e:
+            print(f"[osint] Social signals failed: {e}")
+            social = {"social_results": [], "platforms_found": [], "viral_indicators": [], "manipulation_signals": [], "total_social_found": 0, "social_summary": f"Error: {e}"}
+
+        try:
+            reverse = fut_reverse.result(timeout=15)
+        except Exception as e:
+            print(f"[osint] Reverse search failed: {e}")
+            reverse = {"suggested_queries": [], "reverse_search_results": [], "old_video_reuse_signals": [], "potential_recycled_content": False, "recycled_footage_detected": False, "reverse_search_summary": f"Error: {e}"}
+
+        if fut_geo:
+            try:
+                geo_verification = fut_geo.result(timeout=15)
+            except Exception as e:
+                print(f"[osint] Geolocation verification failed: {e}")
+                geo_verification = {"geo_verifications": [], "geo_contradictions": [], "geo_contradiction_count": 0, "geo_summary": f"Error: {e}"}
+        else:
+            geo_verification = {"geo_verifications": [], "geo_contradictions": [], "geo_contradiction_count": 0, "geo_summary": "No geographic references to verify."}
+
+        try:
+            timestamp = fut_timestamp.result(timeout=15)
+        except Exception as e:
+            print(f"[osint] Timestamp verification failed: {e}")
+            timestamp = {"timestamp_issues": [], "date_verifications": [], "issue_count": 0, "timestamp_summary": f"Error: {e}"}
+
+        try:
+            weather = fut_weather.result(timeout=15)
+        except Exception as e:
+            print(f"[osint] Weather verification failed: {e}")
+            weather = {"weather_claims_found": [], "weather_verifications": [], "weather_summary": f"Error: {e}"}
+
     print("[osint] Verifying source authority (Wayback/WHOIS)...")
     source_urls = [r.get("url") for r in news.get("news_results", []) if r.get("url")]
     source_authority = verify_source_authority(source_urls)

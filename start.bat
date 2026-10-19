@@ -1,6 +1,6 @@
 @echo off
 echo ========================================================
-echo   Multimodal Video Forensics & OSINT Engine - Starting
+echo   Multimodal Video Forensics ^& OSINT Engine - Starting
 echo ========================================================
 echo.
 

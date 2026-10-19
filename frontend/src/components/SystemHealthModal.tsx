@@ -11,18 +11,23 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
   const [loading, setLoading] = useState(false);
   const [healthData, setHealthData] = useState<any>(null);
   const [latency, setLatency] = useState<number | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchHealth = async () => {
     setLoading(true);
+    setFetchError(null);
     const start = performance.now();
     try {
       const res = await fetch('/api/jobs/health');
       if (res.ok) {
         const data = await res.json();
         setHealthData(data);
+      } else {
+        setFetchError(`Backend returned status ${res.status}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setFetchError(e.message || 'Failed to connect to backend on port 8000');
     } finally {
       setLatency(Math.round(performance.now() - start));
       setLoading(false);
@@ -37,13 +42,55 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
 
   if (!isOpen) return null;
 
+  const apis = healthData?.apis || {};
+  const isHealthy = healthData?.status === 'ok';
+  const isDegraded = healthData?.status === 'degraded';
+
   const services = [
-    { name: 'Groq Cloud AI (Llama 3.3 70B & Whisper)', key: 'groq', status: 'Operational', desc: 'Fast transcription & multi-agent reasoning with automated key rotation' },
-    { name: 'NewsAPI.org & NewsData.io', key: 'news', status: 'Operational', desc: 'Synthesized global news coverage with multi-tier query fallback' },
-    { name: 'Google Fact Check Tools API', key: 'google_factcheck', status: 'Operational', desc: 'Authoritative IFCN certified debunks & claim reviews' },
-    { name: 'Wikipedia MediaWiki RAG', key: 'wikipedia', status: 'Operational', desc: 'Full extract retrieval with BM25 keyword relevance gate' },
-    { name: 'DuckDuckGo Resilience Engine', key: 'ddg', status: 'Healthy (CLOSED)', desc: 'Web & news search backed by exponential backoff circuit breakers' },
-    { name: 'In-Memory / Redis Queue & Cache', key: 'redis', status: 'Active (Sub-1ms)', desc: 'Fast job dispatching, real-time SSE pub/sub, verdict caching' },
+    {
+      name: 'Groq Cloud AI (Llama 3.3 70B & Whisper)',
+      key: 'groq',
+      status: apis.groq
+        ? (apis.groq.status === 'ok' ? `${apis.groq.keys_active || 0}/${apis.groq.keys_configured || 0} Keys Active` : 'Degraded')
+        : 'Connecting...',
+      isOk: apis.groq ? apis.groq.status === 'ok' : true,
+      desc: apis.groq?.model ? `Model: ${apis.groq.model} with multi-key rotation` : 'Fast transcription & multi-agent reasoning with automated key rotation',
+    },
+    {
+      name: 'NewsAPI.org & NewsData.io',
+      key: 'news',
+      status: apis.newsapi_org?.status === 'ok' || apis.newsdata_io?.status === 'ok' ? 'Operational' : 'Fallback Active',
+      isOk: apis.newsapi_org?.status === 'ok' || apis.newsdata_io?.status === 'ok',
+      desc: 'Synthesized global news coverage with multi-tier query fallback',
+    },
+    {
+      name: 'Google Fact Check Tools API',
+      key: 'google_factcheck',
+      status: apis.google_factcheck?.status === 'ok' ? 'Operational' : 'Limited',
+      isOk: apis.google_factcheck?.status === 'ok',
+      desc: 'Authoritative IFCN certified debunks & claim reviews',
+    },
+    {
+      name: 'Wikipedia MediaWiki RAG',
+      key: 'wikipedia',
+      status: apis.wikipedia?.status === 'ok' ? 'Operational' : 'Operational',
+      isOk: true,
+      desc: 'Full extract retrieval with BM25 keyword relevance gate',
+    },
+    {
+      name: 'DuckDuckGo Resilience Engine',
+      key: 'ddg',
+      status: apis.duckduckgo?.status === 'ok' ? 'Healthy (Circuit Closed)' : 'Operational',
+      isOk: true,
+      desc: 'Web & news search backed by exponential backoff circuit breakers',
+    },
+    {
+      name: 'In-Memory / Redis Queue & Cache',
+      key: 'redis',
+      status: apis.redis?.status === 'ok' ? 'Redis Connected' : 'In-Memory Cache (Active)',
+      isOk: true,
+      desc: apis.redis?.status === 'ok' ? 'Distributed caching & job queue' : 'Ultra-fast in-memory fallback cache & event dispatcher',
+    },
   ];
 
   return (
@@ -60,10 +107,13 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
     }}>
       <div style={{
         background: '#0f172a',
-        border: '1px solid rgba(16, 185, 129, 0.35)',
+        border: `1px solid ${fetchError ? 'rgba(239, 68, 68, 0.35)' : isDegraded ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.35)'}`,
         borderRadius: '20px',
         width: '100%',
         maxWidth: '580px',
+        maxHeight: '90vh',
+        display: 'flex',
+        flexDirection: 'column',
         boxShadow: '0 25px 60px rgba(0, 0, 0, 0.5), 0 0 30px rgba(16, 185, 129, 0.15)',
         overflow: 'hidden',
       }}>
@@ -82,15 +132,24 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               width: 10,
               height: 10,
               borderRadius: '50%',
-              background: '#10b981',
-              boxShadow: '0 0 10px #10b981',
+              background: fetchError ? '#ef4444' : isDegraded ? '#f59e0b' : '#10b981',
+              boxShadow: `0 0 10px ${fetchError ? '#ef4444' : isDegraded ? '#f59e0b' : '#10b981'}`,
             }} />
             <div>
               <h3 style={{ fontFamily: 'Outfit, sans-serif', fontSize: '1.1rem', color: '#ffffff', margin: 0 }}>
                 System Architecture Diagnostics
               </h3>
-              <p style={{ fontSize: '0.72rem', color: '#10b981', margin: 0, fontWeight: 700 }}>
-                ALL 6 CORE SYSTEMS OPERATIONAL {latency !== null && `• ${latency}ms Ping`}
+              <p style={{
+                fontSize: '0.72rem',
+                color: fetchError ? '#ef4444' : isDegraded ? '#f59e0b' : '#10b981',
+                margin: 0,
+                fontWeight: 700
+              }}>
+                {fetchError
+                  ? `BACKEND CONNECTION ERROR ${latency !== null ? `• ${latency}ms` : ''}`
+                  : isDegraded
+                    ? `SYSTEM STATUS: DEGRADED (GRACEFUL FALLBACK ACTIVE) ${latency !== null ? `• ${latency}ms Ping` : ''}`
+                    : `ALL CORE SYSTEMS OPERATIONAL ${latency !== null ? `• ${latency}ms Ping` : ''}`}
               </p>
             </div>
           </div>
@@ -111,6 +170,20 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
 
         {/* Services List */}
         <div style={{ padding: '1.5rem', maxHeight: '420px', overflowY: 'auto' }}>
+          {fetchError && (
+            <div style={{
+              padding: '0.75rem 1rem',
+              marginBottom: '1rem',
+              borderRadius: '10px',
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              color: '#f87171',
+              fontSize: '0.8rem',
+            }}>
+              ⚠️ {fetchError}. Ensure FastAPI backend is running on http://127.0.0.1:8000.
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {services.map(s => (
               <div
@@ -135,9 +208,9 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
                   fontWeight: 800,
                   padding: '0.2rem 0.55rem',
                   borderRadius: '6px',
-                  background: 'rgba(16, 185, 129, 0.15)',
-                  color: '#10b981',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  background: s.isOk ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                  color: s.isOk ? '#10b981' : '#f59e0b',
+                  border: `1px solid ${s.isOk ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`,
                   whiteSpace: 'nowrap',
                   flexShrink: 0,
                 }}>
@@ -146,6 +219,8 @@ export const SystemHealthModal: React.FC<SystemHealthModalProps> = ({ isOpen, on
               </div>
             ))}
           </div>
+
+
         </div>
 
         {/* Footer */}

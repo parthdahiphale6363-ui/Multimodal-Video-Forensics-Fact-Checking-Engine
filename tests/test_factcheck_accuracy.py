@@ -14,13 +14,17 @@ from pipeline.evidence_classifier import (
     compute_consensus_and_metrics,
     compute_calibrated_confidence,
     detect_topic_trap,
+    is_medical_health_claim,
+    detect_medical_guideline_conflict,
 )
 from pipeline.search import (
     gather_evidence_for_claim,
     _keyword_verdict_from_evidence,
+    _run_llm_reasoning,
     expand_search_queries,
 )
 from shared.schemas.verdict import VerdictLabel, Evidence, Verdict
+
 
 
 # ==============================================================================
@@ -205,7 +209,7 @@ def test_case_e_conflicting_credible_evidence():
     assert metrics["consensus_score"] <= 0.60
 
     verdict_res = _keyword_verdict_from_evidence(claim, [item.model_dump() for item in classified])
-    assert verdict_res.get("label") in ("unverifiable", "unverified", "misleading")
+    assert verdict_res.get("label") in ("misleading", "unverified")
 
 
 # ==============================================================================
@@ -382,3 +386,193 @@ def test_case_j_media_authenticity_isolated_from_transcript_verification():
     # And video forensics remains separate metadata
     assert video_forensics["is_tampered"] is True
     assert transcript_verdict.evidence[0].stance == "SUPPORTS"
+
+
+# ==============================================================================
+# CASE K: Conflicting Medical Guidelines -> Detected & Never Labeled TRUE
+# ==============================================================================
+def test_case_k_conflicting_medical_guidelines_never_true():
+    claim = "Drinking baking soda and lemon juice cures lung cancer."
+    assert is_medical_health_claim(claim) is True
+
+    passages = [
+        {
+            "title": "American Cancer Society: Debunking Cancer Cure Myths",
+            "url": "https://www.cancer.org/cancer/latest-news/debunking-cancer-cure-myths.html",
+            "snippet": "FDA and oncologist guidelines warn against unproven alternative cancer cures. Drinking baking soda does not cure cancer and causes toxic alkalosis.",
+            "source": "cancer.org",
+            "domain": "cancer.org",
+        },
+        {
+            "title": "Memorial Sloan Kettering Cancer Center - Sodium Bicarbonate",
+            "url": "https://www.mskcc.org/cancer-care/integrative-medicine/herbs/sodium-bicarbonate",
+            "snippet": "Clinical trials found no clinical evidence that alkaline diets or lemon juice cure cancer; health authorities caution it contradicts medical guidelines.",
+            "source": "mskcc.org",
+            "domain": "mskcc.org",
+        },
+    ]
+
+    # Verify medical guideline conflict detection
+    for p in passages:
+        assert detect_medical_guideline_conflict(claim, f"{p['title']} {p['snippet']}") is True
+
+    classified = classify_evidence_passages(claim, passages)
+    assert len(classified) == 2
+    for item in classified:
+        assert item.stance == EvidenceStance.CONTRADICTS
+        assert item.supports_claim is False
+        assert "guideline" in item.explanation.lower() or "authority" in item.explanation.lower() or "clinical" in item.explanation.lower()
+
+    # The claim must be FALSE (or MISLEADING), NEVER TRUE
+    verdict_res = _keyword_verdict_from_evidence(claim, [item.model_dump() for item in classified])
+    assert verdict_res.get("label") in ("false", "misleading")
+    assert verdict_res.get("label") != "true"
+
+
+# ==============================================================================
+# CASE L: Merely Related Information Without Direct Evidence -> INSUFFICIENT & UNVERIFIED
+# ==============================================================================
+def test_case_l_merely_related_info_without_direct_evidence_is_unverified():
+    claim = "Consuming wild blueberries completely cures rheumatoid arthritis."
+    assert is_medical_health_claim(claim) is True
+
+    # Passages share lots of related words (blueberries, arthritis, inflammation, diet)
+    # but do NOT verify or prove that wild blueberries completely cure rheumatoid arthritis.
+    merely_related_passages = [
+        {
+            "title": "Nutritional Profile of Blueberries",
+            "url": "https://www.nutrition.example.org/blueberries",
+            "snippet": "Wild blueberries contain anthocyanins and dietary fiber which contribute to normal cellular health and antioxidant defenses.",
+            "source": "nutrition.example.org",
+            "domain": "nutrition.example.org",
+        },
+        {
+            "title": "Arthritis Foundation Overview",
+            "url": "https://www.arthritis.example.org/overview",
+            "snippet": "Rheumatoid arthritis is an autoimmune condition involving joint inflammation and immune system dysfunction in adults.",
+            "source": "arthritis.example.org",
+            "domain": "arthritis.example.org",
+        },
+    ]
+
+    classified = classify_evidence_passages(claim, merely_related_passages)
+    assert len(classified) == 2
+    # Neither passage provides direct clinical corroboration of a cure
+    for item in classified:
+        assert item.stance in (EvidenceStance.INSUFFICIENT, EvidenceStance.IRRELEVANT)
+        assert item.supports_claim is None or item.supports_claim is False
+
+    verdict_res = _keyword_verdict_from_evidence(claim, [item.model_dump() for item in classified])
+    assert verdict_res.get("label") in ("misleading", "unverified")
+    assert verdict_res.get("confidence") <= 0.35
+    assert "unverified" in verdict_res.get("reasoning", "").lower() or "unverified" in verdict_res.get("summary", "").lower()
+
+
+# ==============================================================================
+# CASE M: Prevent Fabricated Citations & Preserve Authentic Snippets
+# ==============================================================================
+def test_case_m_prevent_fabricated_citations_and_preserve_authentic_snippets():
+    authentic_snippet = "Water boils at exactly 100 degrees Celsius at 1 atmosphere of standard pressure."
+    web_evidence = [
+        {
+            "source_url": "https://physics.nist.gov/water-boil",
+            "source_title": "NIST Physics Reference",
+            "domain": "nist.gov",
+            "snippet": authentic_snippet,
+            "relevance_score": 0.95,
+        }
+    ]
+
+    # Simulate an LLM attempting to fabricate an imaginary URL and an altered snippet
+    mock_llm_response = {
+        "label": "true",
+        "confidence": 0.9,
+        "reasoning": "Physics standards confirm boiling point.",
+        "summary": "Water boils at 100 C.",
+        "evidence": [
+            {
+                "source_url": "https://fabricated-source-does-not-exist.org/fake",
+                "source_title": "Fabricated Page",
+                "domain": "fabricated-source-does-not-exist.org",
+                "snippet": "Fabricated quote never retrieved from search engine.",
+                "supports_claim": True,
+            },
+            {
+                "source_url": "https://physics.nist.gov/water-boil",
+                "source_title": "NIST Physics Reference",
+                "domain": "nist.gov",
+                "snippet": "Model rewritten snippet that was not in original document.",
+                "supports_claim": True,
+            }
+        ]
+    }
+
+    with patch("pipeline.search.call_llm_with_fallback") as mock_llm:
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content=str(mock_llm_response).replace("'", '"').replace("True", "true")))]
+        mock_llm.return_value = mock_response
+
+        res = _run_llm_reasoning("Water boils at 100 C.", "Water boils at 100 C.", "", web_evidence)
+
+        # 1. The fabricated URL must be stripped out entirely
+        cited_urls = [e["source_url"] for e in res["evidence"]]
+        assert "https://fabricated-source-does-not-exist.org/fake" not in cited_urls
+        assert cited_urls == ["https://physics.nist.gov/water-boil"]
+
+        # 2. The authentic source snippet must be preserved, not overwritten by hallucinated text
+        assert res["evidence"][0]["snippet"] == authentic_snippet
+
+
+# ==============================================================================
+# CASE N: Calibrated Consensus & Confidence Metrics
+# ==============================================================================
+def test_case_n_calibrated_consensus_and_confidence():
+    # 1. Solitary source cannot claim 100% consensus
+    single_source = [
+        ClassifiedEvidenceItem(
+            source_title="Study 1",
+            source_url="https://site1.org/1",
+            domain="site1.org",
+            snippet="Corroborating text",
+            stance=EvidenceStance.SUPPORTS,
+            supports_claim=True,
+            relevance_score=0.9,
+            credibility_score=0.85,
+            is_independent=True,
+        )
+    ]
+    m1 = compute_consensus_and_metrics(single_source)
+    assert m1["consensus_score"] <= 0.55, f"Solitary source should not exceed 0.55 consensus, got {m1['consensus_score']}"
+
+    # 2. Conflicting evidence yields low/divided consensus
+    conflicted_sources = [
+        ClassifiedEvidenceItem(
+            source_title="Study A",
+            source_url="https://domain-a.org/a",
+            domain="domain-a.org",
+            snippet="Supports assertion",
+            stance=EvidenceStance.SUPPORTS,
+            supports_claim=True,
+            relevance_score=0.85,
+            credibility_score=0.85,
+            is_independent=True,
+        ),
+        ClassifiedEvidenceItem(
+            source_title="Study B",
+            source_url="https://domain-b.org/b",
+            domain="domain-b.org",
+            snippet="Contradicts assertion",
+            stance=EvidenceStance.CONTRADICTS,
+            supports_claim=False,
+            relevance_score=0.85,
+            credibility_score=0.85,
+            is_independent=True,
+        ),
+    ]
+    m2 = compute_consensus_and_metrics(conflicted_sources)
+    assert m2["consensus_score"] <= 0.20, f"Conflicted sources should have low consensus, got {m2['consensus_score']}"
+
+    # 3. UNVERIFIED verdict confidence must be strictly bounded <= 0.35
+    unverified_conf = compute_calibrated_confidence("unverified", conflicted_sources, m2["consensus_score"], base_llm_confidence=0.9)
+    assert unverified_conf <= 0.35, f"Unverified confidence must be <= 0.35, got {unverified_conf}"
+

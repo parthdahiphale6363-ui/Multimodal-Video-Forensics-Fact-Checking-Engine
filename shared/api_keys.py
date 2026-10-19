@@ -16,6 +16,12 @@ import urllib.request
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 # ─── Key Status Constants ─────────────────────────────────────────────────────
 
@@ -102,6 +108,7 @@ class APIKeyManager:
         self._groq_keys: List[KeyState] = []
         self._groq_index: int = 0
         self._groq_lock = threading.Lock()
+        self._newsapi_keys: List[KeyState] = []
         self._newsapi_key: Optional[str] = None
         self._newsdata_key: Optional[str] = None
         self._google_fc_key: Optional[str] = None
@@ -119,11 +126,16 @@ class APIKeyManager:
             self._groq_keys = []
             print("[APIKeyManager] [!] No GROQ_API_KEY configured")
 
-        # NewsAPI.org
-        self._newsapi_key = os.getenv("NEWS_API_KEY", "").strip() or None
-        if self._newsapi_key:
-            print(f"[APIKeyManager] NewsAPI.org key loaded (len={len(self._newsapi_key)})")
+        # NewsAPI.org (supports comma-separated list of keys for auto-rotation)
+        newsapi_raw = os.getenv("NEWS_API_KEY", "").strip()
+        if newsapi_raw:
+            n_keys = [k.strip() for k in newsapi_raw.split(",") if k.strip()]
+            self._newsapi_keys = [KeyState(k) for k in n_keys]
+            self._newsapi_key = self._newsapi_keys[0].key
+            print(f"[APIKeyManager] NewsAPI.org loaded {len(self._newsapi_keys)} key(s)")
         else:
+            self._newsapi_keys = []
+            self._newsapi_key = None
             print("[APIKeyManager] [!] No NEWS_API_KEY configured -- NewsAPI.org disabled")
 
         # NewsData.io
@@ -213,7 +225,12 @@ class APIKeyManager:
     # ─── Simple Key Getters ───────────────────────────────────────────────────
 
     def get_newsapi_key(self) -> Optional[str]:
-        return self._newsapi_key
+        if not self._newsapi_keys:
+            return self._newsapi_key
+        for ks in self._newsapi_keys:
+            if ks.is_available():
+                return ks.key
+        return None
 
     def get_newsdata_key(self) -> Optional[str]:
         return self._newsdata_key
@@ -272,11 +289,9 @@ class APIKeyManager:
         # 6. Wikipedia (no key needed)
         report["apis"]["wikipedia"] = {"status": STATUS_OK, "no_key_required": True}
 
-        # 7. Redis
+        # 7. Redis / In-memory engine
         redis_status = self._validate_redis()
         report["apis"]["redis"] = redis_status
-        if redis_status["status"] != STATUS_OK:
-            report["warnings"].append("Redis not connected — using in-memory fallback (verdict cache, job queue)")
 
         # Groq key count warning
         if len(self._groq_keys) == 1:
@@ -343,33 +358,57 @@ class APIKeyManager:
         }
 
     def _validate_newsapi(self) -> Dict[str, Any]:
-        if not self._newsapi_key:
+        if not self._newsapi_keys and not self._newsapi_key:
             return {"status": STATUS_MISSING, "key_configured": False}
 
-        try:
-            params = urllib.parse.urlencode({
-                "q": "test",
-                "language": "en",
-                "pageSize": 1,
-                "apiKey": self._newsapi_key,
-            })
-            url = f"https://newsapi.org/v2/everything?{params}"
-            req = urllib.request.Request(url, headers={"User-Agent": "FactChecker/2.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if data.get("status") == "ok":
-                    return {"status": STATUS_OK, "key_configured": True}
-                else:
-                    return {
-                        "status": STATUS_UNAVAILABLE,
-                        "key_configured": True,
-                        "error": data.get("message", "Unknown error"),
-                    }
-        except Exception as e:
-            err = str(e)
-            if "401" in err or "apiKey" in err.lower():
-                return {"status": STATUS_INVALID, "key_configured": True, "error": "Invalid API key"}
-            return {"status": STATUS_UNAVAILABLE, "key_configured": True, "error": str(e)[:100]}
+        keys_to_test = self._newsapi_keys if self._newsapi_keys else [KeyState(self._newsapi_key)]
+        active_key = None
+        rate_limited_count = 0
+
+        for ks in keys_to_test:
+            try:
+                params = urllib.parse.urlencode({
+                    "q": "test",
+                    "language": "en",
+                    "pageSize": 1,
+                    "apiKey": ks.key,
+                })
+                url = f"https://newsapi.org/v2/everything?{params}"
+                req = urllib.request.Request(url, headers={"User-Agent": "FactChecker/2.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if data.get("status") == "ok":
+                        ks.record_success()
+                        active_key = ks.key
+                        break
+                    else:
+                        ks.record_auth_failure()
+            except Exception as e:
+                err = str(e)
+                if "429" in err:
+                    ks.record_rate_limit(3600.0)
+                    rate_limited_count += 1
+                elif "401" in err or "apiKey" in err.lower():
+                    ks.record_auth_failure()
+
+        if active_key:
+            self._newsapi_key = active_key
+            return {"status": STATUS_OK, "key_configured": True}
+
+        if rate_limited_count > 0:
+            # Trip circuit breaker immediately so runtime requests won't stall
+            try:
+                from shared.resilience import get_breaker
+                get_breaker("newsapi").trip(cooldown=3600.0)
+            except Exception:
+                pass
+            return {
+                "status": STATUS_DEGRADED,
+                "key_configured": True,
+                "error": "Daily limit reached (NewsData active)",
+            }
+
+        return {"status": STATUS_INVALID, "key_configured": True, "error": "Invalid API key"}
 
     def _validate_newsdata(self) -> Dict[str, Any]:
         if not self._newsdata_key:
@@ -425,27 +464,27 @@ class APIKeyManager:
             return {"status": STATUS_UNAVAILABLE, "key_configured": True, "error": str(e)[:100]}
 
     def _validate_redis(self) -> Dict[str, Any]:
+        redis_url = os.getenv("REDIS_URL", "").strip()
         try:
             import redis as redis_lib
         except ImportError:
-            return {"status": STATUS_UNAVAILABLE, "using_fallback": True, "error": "redis package not installed"}
+            return {"status": STATUS_OK, "using_fallback": True, "engine": "in-memory"}
 
-        redis_url = os.getenv("REDIS_URL", "")
         if not redis_url:
-            # Try default localhost
+            # Try default localhost if redis package is installed
             try:
-                client = redis_lib.Redis(host="localhost", port=6379, decode_responses=True)
+                client = redis_lib.Redis(host="localhost", port=6379, decode_responses=True, socket_timeout=0.5)
                 client.ping()
-                return {"status": STATUS_OK, "using_fallback": False}
+                return {"status": STATUS_OK, "using_fallback": False, "engine": "redis"}
             except Exception:
-                return {"status": STATUS_UNAVAILABLE, "using_fallback": True}
+                return {"status": STATUS_OK, "using_fallback": True, "engine": "in-memory"}
 
         try:
-            client = redis_lib.from_url(redis_url, decode_responses=True)
+            client = redis_lib.from_url(redis_url, decode_responses=True, socket_timeout=1.0)
             client.ping()
-            return {"status": STATUS_OK, "using_fallback": False}
+            return {"status": STATUS_OK, "using_fallback": False, "engine": "redis"}
         except Exception:
-            return {"status": STATUS_UNAVAILABLE, "using_fallback": True}
+            return {"status": STATUS_DEGRADED, "using_fallback": True, "engine": "in-memory", "error": "Configured REDIS_URL unreachable"}
 
     # ─── Startup Status Table ─────────────────────────────────────────────────
 
@@ -453,32 +492,34 @@ class APIKeyManager:
         """Print a formatted status table to the console at startup."""
         report = self.validate_all_keys()
 
-        lines = [
-            "",
-            "+----------------------------------------------+",
-            "|    Video Fact-Checker -- API Key Status       |",
-            "+----------------------------------------------+",
-        ]
+        border = "+" + "-" * 64 + "+"
+        header = f"|   Video Fact-Checker -- API Key Status{' ' * 25}|"
+        lines = ["", border, header, border]
 
         api_display = [
             ("Groq LLM", "groq", lambda a: f"{a.get('keys_active', 0)}/{a.get('keys_configured', 0)} keys active" if a["status"] != STATUS_MISSING else "Not configured"),
-            ("NewsAPI.org", "newsapi_org", lambda a: "Connected" if a["status"] == STATUS_OK else a.get("error", a["status"])),
+            ("NewsAPI.org", "newsapi_org", lambda a: "Connected" if a["status"] == STATUS_OK else a.get("error", "Not configured")),
             ("NewsData.io", "newsdata_io", lambda a: "Connected" if a["status"] == STATUS_OK else a.get("error", "Not configured")),
             ("Google FactCheck", "google_factcheck", lambda a: "Connected" if a["status"] == STATUS_OK else a.get("error", "Not configured")),
             ("DuckDuckGo", "duckduckgo", lambda _: "No key required"),
             ("Wikipedia", "wikipedia", lambda _: "No key required"),
-            ("Redis", "redis", lambda a: "Connected" if a["status"] == STATUS_OK else "Not connected (in-memory fallback)"),
+            ("Cache Engine", "redis", lambda a: "Redis connected" if not a.get("using_fallback") else "In-memory engine (active)"),
         ]
 
         for display_name, key, detail_fn in api_display:
             api_info = report["apis"].get(key, {})
             status = api_info.get("status", STATUS_MISSING)
-            icon = "[OK]" if status == STATUS_OK else "[! ]" if status in (STATUS_MISSING, STATUS_DEGRADED) else "[X ]"
-            detail = detail_fn(api_info)
-            line = f"| {icon} {display_name:<16}: {detail:<23} |"
+            if status == STATUS_OK:
+                icon = "[OK]"
+            elif status in (STATUS_DEGRADED, STATUS_COOLING, STATUS_MISSING):
+                icon = "[! ]"
+            else:
+                icon = "[X ]"
+            detail = detail_fn(api_info)[:38]
+            line = f"| {icon} {display_name:<17}: {detail:<38} |"
             lines.append(line)
 
-        lines.append("+----------------------------------------------+")
+        lines.append(border)
 
         if report["warnings"]:
             lines.append("")

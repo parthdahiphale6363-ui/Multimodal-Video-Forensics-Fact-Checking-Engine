@@ -107,6 +107,31 @@ def extract_audio(url_or_path: str, output_dir: str = None) -> ExtractionResult:
             "preferredquality": "128",
         }],
         "noplaylist": True,
+        # ── Anti-403 / Bot-detection bypass ──────────────────────────────────
+        # Use the web_creator client which bypasses PO Token requirements
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_creator", "web", "android"],
+                "skip": ["hls", "dash"],
+            }
+        },
+        # Spoof a real browser user-agent
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate",
+            "Sec-Fetch-Mode": "navigate",
+        },
+        # Sleep between requests to avoid rate limiting
+        "sleep_interval": 1,
+        "max_sleep_interval": 5,
+        # Allow age-restricted content workaround
+        "age_limit": None,
     }
 
     # Point yt-dlp to ffmpeg/ffprobe if they're not on the process PATH
@@ -152,15 +177,27 @@ def extract_audio(url_or_path: str, output_dir: str = None) -> ExtractionResult:
     except ExtractionError:
         raise
     except Exception as e:
-        err_msg = str(e).lower()
+        import re as _re
+        # Strip ANSI escape codes from yt-dlp error messages (prevents garbled UI output)
+        raw = _re.sub(r'\x1b\[[0-9;]*m', '', str(e))
+        err_msg = raw.lower()
         if "private" in err_msg or "unauthorized" in err_msg:
             msg = "This video is private. Please ensure the video is public."
-        elif "sign in to confirm your age" in err_msg or "confirm your age" in err_msg or "age-gated" in err_msg or "age" in err_msg:
+        elif "sign in to confirm your age" in err_msg or "confirm your age" in err_msg or "age-gated" in err_msg:
             msg = "This video is age-restricted. Age-restricted videos cannot be downloaded."
-        elif "geo-restricted" in err_msg or "not available in your country" in err_msg or "geo" in err_msg:
-            msg = "This video is geo-blocked/geo-restricted."
+        elif "geo-restricted" in err_msg or "not available in your country" in err_msg:
+            msg = "This video is geo-blocked/geo-restricted and cannot be downloaded from this location."
         elif "deleted" in err_msg or "not exist" in err_msg or "removed" in err_msg or "404" in err_msg:
             msg = "This video does not exist or has been deleted/removed."
+        elif "403" in err_msg or "forbidden" in err_msg or "unable to download video data" in err_msg:
+            msg = (
+                "YouTube blocked the download (HTTP 403 Forbidden). "
+                "This usually happens with heavily restricted videos. "
+                "Try a different video or a YouTube Shorts link."
+            )
+        elif "sign in" in err_msg or "login" in err_msg:
+            msg = "This video requires sign-in to watch and cannot be accessed."
         else:
-            msg = f"Failed to extract audio from URL: {e}"
+            msg = f"Failed to extract audio from URL: {raw}"
         raise ExtractionError(msg) from e
+

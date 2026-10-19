@@ -15,6 +15,10 @@ def test_gather_evidence_for_claim_returns_fallback_evidence_without_api_keys(mo
     monkeypatch.delenv("NEWS_API_KEY", raising=False)
     monkeypatch.delenv("NEWSDATA_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_FACTCHECK_API_KEY", raising=False)
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+
+    from pipeline.search import _in_memory_verdict_cache
+    _in_memory_verdict_cache.clear()
 
     # Reset the APIKeyManager singleton so it re-reads cleared env vars
     import shared.api_keys as _akm
@@ -23,10 +27,9 @@ def test_gather_evidence_for_claim_returns_fallback_evidence_without_api_keys(mo
 
     result = gather_evidence_for_claim("The sky is blue.", "The sky is blue during daytime.")
 
-    # Without any API keys, the pipeline returns "false" with low confidence
-    # and a transcript-context fallback evidence item
-    assert result["label"] in ("false", "unverifiable", "misleading")
-    assert result["evidence"]
+    # A transcript is context, not an independently citable source. Without a
+    # verifier, the system must fail closed and expose no fabricated citation.
+    assert result["label"] in ("misleading", "unverified")
+    assert result["evidence"] == []
     assert result["confidence"] <= 0.5
     assert "no llm" in result["reasoning"].lower() or "transcript" in result["reasoning"].lower()
-

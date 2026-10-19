@@ -87,8 +87,8 @@ def classify_content(
     verdicts = [item["verdict"]["label"].lower() for item in claim_items]
     v_counter = Counter(verdicts)
     total_claims = len(verdicts) or 1
-    false_ratio = (v_counter.get("false", 0) + v_counter.get("misleading", 0)) / total_claims
-    true_ratio = v_counter.get("true", 0) / total_claims
+    false_ratio = (v_counter.get("false", 0) + v_counter.get("contradicted", 0) + v_counter.get("misleading", 0)) / total_claims
+    true_ratio = (v_counter.get("true", 0) + v_counter.get("supported", 0)) / total_claims
     signals["false_claim_ratio"] = false_ratio
     signals["true_claim_ratio"] = true_ratio
 
@@ -105,7 +105,9 @@ def classify_content(
 
     # Signal 4: Deepfake probability from forensics
     deepfake_prob = forensics_report.get("deepfake_probability", 0.0)
-    is_synthetic = forensics_report.get("is_synthetic", False) or deepfake_prob >= 0.55
+    # Only a validated detector may assert synthetic media. Heuristic scores are
+    # diagnostic metadata and must not become a truthfulness veto.
+    is_synthetic = forensics_report.get("detector_status") == "validated" and forensics_report.get("is_synthetic", False)
     signals["deepfake_probability"] = deepfake_prob
     signals["is_synthetic"] = 1.0 if is_synthetic else 0.0
 
@@ -127,57 +129,69 @@ def classify_content(
     credibility_bonus = (true_ratio * 0.2 + signals["credibility_keyword_score"] * 0.1)
     final_score = min(max(0.0, suspicion_score - credibility_bonus), 1.0)
 
-    # Multi-Modal Veto & Map score to category
+    # Multi-Modal Veto & Map score to forensic category
     dm_veto = {"veto": False, "verdict": None, "reason": None}
 
     if is_synthetic:
-        category = "Deepfake"
+        category = "Deepfake Video"
         confidence = max(0.85, 0.60 + deepfake_prob * 0.3)
         dm_veto = {
             "veto": True,
-            "verdict": "Deepfake",
+            "verdict": "Deepfake Video",
             "reason": "Data mining validated forensic synthetic speech / deepfake indicators",
         }
     elif recycled_content:
-        category = "Manipulated"
+        category = "Manipulated Out of Context"
         confidence = max(0.80, 0.50 + false_ratio * 0.4)
         dm_veto = {
             "veto": True,
-            "verdict": "Manipulated",
+            "verdict": "Manipulated Out of Context",
             "reason": "Data mining identified recycled footage out-of-context pattern",
         }
-    elif final_score >= 0.60:
-        category = "Fake"
-        confidence = 0.55 + final_score * 0.3
+    elif false_ratio >= 0.50 or final_score >= 0.60:
+        category = "Deceptive Media / Debunked Content"
+        confidence = 0.60 + final_score * 0.35
         dm_veto = {
             "veto": True,
             "verdict": "Fake",
-            "reason": f"Data mining suspicion score ({final_score:.2f}) exceeds critical misinformation threshold (60%+)",
+            "reason": f"Data mining suspicion score ({final_score:.2f}) indicates severe misinformation density",
         }
-    elif final_score >= 0.42:
-        category = "Misleading"
-        confidence = 0.50 + final_score * 0.25
+    elif v_counter.get("false", 0) >= 2 or (v_counter.get("false", 0) >= 1 and v_counter.get("misleading", 0) >= 1):
+        category = "Misinformation Pattern Detected"
+        confidence = max(0.75, 0.58 + (v_counter.get("false", 0) / total_claims) * 0.35)
+        dm_veto = {
+            "veto": True,
+            "verdict": "Fake",
+            "reason": f"Systematic misinformation pattern: {v_counter.get('false', 0)} independently debunked false claims identified",
+        }
+    elif v_counter.get("false", 0) == 1:
+        category = "Debunked False Claims"
+        confidence = max(0.68, 0.55 + (1 / total_claims) * 0.30)
         dm_veto = {
             "veto": True,
             "verdict": "Misleading",
-            "reason": "Elevated pattern matching against deceptive / misleading narratives",
+            "reason": "Verified false claim detected within media content",
         }
-    elif false_ratio >= 0.30:
-        category = "Manipulated"
-        confidence = 0.50 + false_ratio * 0.3
+    elif v_counter.get("misleading", 0) >= 1 or final_score >= 0.35:
+        category = "Misleading Narrative"
+        confidence = max(0.65, 0.50 + final_score * 0.25)
         dm_veto = {
             "veto": True,
-            "verdict": "Manipulated",
-            "reason": f"Significant false claim proportion ({int(false_ratio * 100)}%) detected in content",
+            "verdict": "Misleading",
+            "reason": "Elevated pattern matching against deceptive / misleading narrative structures",
         }
-    elif final_score <= 0.15 and true_ratio >= 0.60:
-        category = "Genuine"
-        confidence = 0.80 - final_score
-    elif final_score <= 0.30:
-        category = "Likely Genuine"
-        confidence = 0.65 - final_score
+    elif true_ratio >= 0.60 and final_score <= 0.20:
+        category = "Verified Authentic Content"
+        confidence = min(0.95, 0.72 + true_ratio * 0.25)
+    elif true_ratio > 0 and (v_counter.get("false", 0) > 0 or v_counter.get("misleading", 0) > 0):
+        category = "Mixed Veracity / Partially Misleading"
+        confidence = 0.68
+    elif true_ratio > 0.30 and final_score <= 0.35:
+        category = "Likely Genuine Video"
+        confidence = max(0.60, 0.65 - final_score)
     else:
-        category = "Unverified"
+        # Contextual label when claims lack sufficient independent verification data
+        category = "Unsubstantiated Media Claims"
         confidence = 0.45
 
     return {

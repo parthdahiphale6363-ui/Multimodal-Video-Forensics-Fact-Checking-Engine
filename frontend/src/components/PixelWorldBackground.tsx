@@ -467,6 +467,11 @@ export default function PixelWorldBackground({ initialTheme = 'night' }: Props) 
   const [activeToy, setActiveToy] = useState<'none' | 'yarn' | 'fish'>('none');
   const [catSpeech, setCatSpeech] = useState<string | null>(null);
   const [speechTimer, setSpeechTimer] = useState<number>(0);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Initialize theme from localStorage or preferred scheme
   useEffect(() => {
@@ -481,8 +486,30 @@ export default function PixelWorldBackground({ initialTheme = 'night' }: Props) 
         setTheme(customEvent.detail);
       }
     };
+    const onExternalSpeed = (e: Event) => {
+      const customEvent = e as CustomEvent<'walk' | 'trot' | 'zoomies'>;
+      if (customEvent.detail) {
+        setSpeedMode(customEvent.detail);
+      }
+    };
+    const onExternalSound = (e: Event) => {
+      const customEvent = e as CustomEvent<boolean>;
+      if (typeof customEvent.detail === 'boolean') {
+        synth.init();
+        synth.enabled = customEvent.detail;
+        setSoundEnabled(customEvent.detail);
+      }
+    };
+
     window.addEventListener('pixel-theme-change', onExternalTheme);
-    return () => window.removeEventListener('pixel-theme-change', onExternalTheme);
+    window.addEventListener('pixel-speed-change', onExternalSpeed);
+    window.addEventListener('pixel-sound-change', onExternalSound);
+
+    return () => {
+      window.removeEventListener('pixel-theme-change', onExternalTheme);
+      window.removeEventListener('pixel-speed-change', onExternalSpeed);
+      window.removeEventListener('pixel-sound-change', onExternalSound);
+    };
   }, [initialTheme, theme]);
 
   const toggleTheme = (newTheme?: 'night' | 'day') => {
@@ -654,6 +681,16 @@ export default function PixelWorldBackground({ initialTheme = 'night' }: Props) 
 
     // Click handler for cat & meadow
     const onCanvasClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target.closest(
+          'button, input, a, select, textarea, [role="button"], [role="toolbar"], .glass, .demo-card, .module-card, .url-command-bar, .pixel-floating-dock, .modal-backdrop, .error-box'
+        )
+      ) {
+        return; // Never intercept clicks on dashboard UI controls
+      }
+
       const rect = canvas.getBoundingClientRect();
       const clickX = e.clientX - rect.left;
       const clickY = e.clientY - rect.top;
@@ -1140,235 +1177,140 @@ export default function PixelWorldBackground({ initialTheme = 'night' }: Props) 
   }, [theme, speedMode, showSpeech, catSpeech, speechTimer]);
 
   return (
-    <>
-      {/* ── Fullscreen Background Video Canvas ── */}
-      <div className="pixel-bg-layer" aria-hidden="true">
-        <canvas ref={canvasRef} className="pixel-bg-canvas" />
-      </div>
+    <div className="pixel-bg-layer" aria-hidden="true">
+      <canvas ref={canvasRef} className="pixel-bg-canvas" />
+    </div>
+  );
+}
 
-      {/* ── Floating Controls Bar (Day/Night, Speed, Sound) ── */}
-      <div className="pixel-floating-dock" role="toolbar" aria-label="Background Animation Controls">
-        {/* Day / Night Pill Switch */}
-        <div className="dock-theme-switch">
-          <button
-            className={`dock-btn ${theme === 'day' ? 'active' : ''}`}
-            onClick={() => toggleTheme('day')}
-            title="Switch to Daytime Meadow mode"
-          >
-            ☀️ Day
-          </button>
-          <button
-            className={`dock-btn ${theme === 'night' ? 'active' : ''}`}
-            onClick={() => toggleTheme('night')}
-            title="Switch to Starry Midnight mode"
-          >
-            🌙 Night
-          </button>
-        </div>
+export function PixelAnimationControls() {
+  const [theme, setTheme] = useState<'night' | 'day'>('night');
+  const [speedMode, setSpeedMode] = useState<'walk' | 'trot' | 'zoomies'>('walk');
+  const [soundEnabled, setSoundEnabled] = useState(false);
 
-        <div className="dock-divider" />
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('pixel_theme') as 'night' | 'day' | null;
+    if (savedTheme) setTheme(savedTheme);
 
-        {/* Speed presets */}
-        <div className="dock-group">
-          <button
-            className={`dock-pill ${speedMode === 'walk' ? 'active' : ''}`}
-            onClick={() => setSpeedMode('walk')}
-            title="Gentle walk"
-          >
-            🐾 Walk
-          </button>
-          <button
-            className={`dock-pill ${speedMode === 'trot' ? 'active' : ''}`}
-            onClick={() => setSpeedMode('trot')}
-            title="Trot pace"
-          >
-            🏃 Trot
-          </button>
-          <button
-            className={`dock-pill ${speedMode === 'zoomies' ? 'active' : ''}`}
-            onClick={() => setSpeedMode('zoomies')}
-            title="Sprint zoomies!"
-          >
-            ⚡ Zoomies
-          </button>
-        </div>
+    const savedSpeed = localStorage.getItem('pixel_speed') as 'walk' | 'trot' | 'zoomies' | null;
+    if (savedSpeed) setSpeedMode(savedSpeed);
 
-        <div className="dock-divider" />
+    const savedSound = localStorage.getItem('pixel_sound');
+    if (savedSound !== null) setSoundEnabled(savedSound === 'true');
 
-        {/* Sound Toggle */}
+    const onThemeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<'night' | 'day'>;
+      if (customEvent.detail) setTheme(customEvent.detail);
+    };
+    const onSpeedChange = (e: Event) => {
+      const customEvent = e as CustomEvent<'walk' | 'trot' | 'zoomies'>;
+      if (customEvent.detail) setSpeedMode(customEvent.detail);
+    };
+    const onSoundChange = (e: Event) => {
+      const customEvent = e as CustomEvent<boolean>;
+      if (typeof customEvent.detail === 'boolean') setSoundEnabled(customEvent.detail);
+    };
+
+    window.addEventListener('pixel-theme-change', onThemeChange);
+    window.addEventListener('pixel-speed-change', onSpeedChange);
+    window.addEventListener('pixel-sound-change', onSoundChange);
+
+    return () => {
+      window.removeEventListener('pixel-theme-change', onThemeChange);
+      window.removeEventListener('pixel-speed-change', onSpeedChange);
+      window.removeEventListener('pixel-sound-change', onSoundChange);
+    };
+  }, []);
+
+  const toggleTheme = (newTheme?: 'night' | 'day') => {
+    const next = newTheme || (theme === 'night' ? 'day' : 'night');
+    setTheme(next);
+    localStorage.setItem('pixel_theme', next);
+    document.documentElement.setAttribute('data-theme', next === 'night' ? 'dark' : 'light');
+    window.dispatchEvent(new CustomEvent('pixel-theme-change', { detail: next }));
+    synth.jump();
+  };
+
+  const setSpeed = (mode: 'walk' | 'trot' | 'zoomies') => {
+    setSpeedMode(mode);
+    localStorage.setItem('pixel_speed', mode);
+    window.dispatchEvent(new CustomEvent('pixel-speed-change', { detail: mode }));
+    synth.jump();
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    synth.init();
+    synth.enabled = next;
+    setSoundEnabled(next);
+    localStorage.setItem('pixel_sound', String(next));
+    window.dispatchEvent(new CustomEvent('pixel-sound-change', { detail: next }));
+    if (next) synth.meow();
+  };
+
+  return (
+    <div className="pixel-floating-dock" role="toolbar" aria-label="Background Animation Controls">
+      {/* Day / Night Pill Switch */}
+      <div className="dock-theme-switch">
         <button
-          className={`dock-pill sound-pill ${soundEnabled ? 'active' : ''}`}
-          onClick={toggleSound}
-          title={soundEnabled ? 'Mute 8-bit sound' : 'Enable 8-bit sound effects'}
+          type="button"
+          className={`dock-btn ${theme === 'day' ? 'active' : ''}`}
+          onClick={() => toggleTheme('day')}
+          title="Switch to Daytime Meadow mode"
         >
-          {soundEnabled ? '🔊 Sound On' : '🔇 Muted'}
+          ☀️ Day
+        </button>
+        <button
+          type="button"
+          className={`dock-btn ${theme === 'night' ? 'active' : ''}`}
+          onClick={() => toggleTheme('night')}
+          title="Switch to Starry Midnight mode"
+        >
+          🌙 Night
         </button>
       </div>
 
-      <style jsx>{`
-        .pixel-bg-layer {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          z-index: 0;
-          pointer-events: none;
-          overflow: hidden;
-        }
+      <div className="dock-divider" />
 
-        .pixel-bg-canvas {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          image-rendering: pixelated;
-          image-rendering: crisp-edges;
-          display: block;
-        }
+      {/* Speed presets */}
+      <div className="dock-group">
+        <button
+          type="button"
+          className={`dock-pill ${speedMode === 'walk' ? 'active' : ''}`}
+          onClick={() => setSpeed('walk')}
+          title="Gentle walk"
+        >
+          🐾 Walk
+        </button>
+        <button
+          type="button"
+          className={`dock-pill ${speedMode === 'trot' ? 'active' : ''}`}
+          onClick={() => setSpeed('trot')}
+          title="Trot pace"
+        >
+          🏃 Trot
+        </button>
+        <button
+          type="button"
+          className={`dock-pill ${speedMode === 'zoomies' ? 'active' : ''}`}
+          onClick={() => setSpeed('zoomies')}
+          title="Sprint zoomies!"
+        >
+          ⚡ Zoomies
+        </button>
+      </div>
 
-        .pixel-floating-dock {
-          position: fixed;
-          top: 14px;
-          right: 24px;
-          z-index: 100;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.35rem 0.75rem;
-          background: rgba(15, 23, 42, 0.88);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          border-radius: 99px;
-          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-          transition: all 0.25s ease;
-        }
+      <div className="dock-divider" />
 
-        :global([data-theme='light']) .pixel-floating-dock {
-          background: rgba(255, 255, 255, 0.94);
-          border-color: rgba(0, 0, 0, 0.12);
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-        }
-
-        .dock-theme-switch {
-          display: flex;
-          align-items: center;
-          background: rgba(255, 255, 255, 0.08);
-          border-radius: 99px;
-          padding: 0.15rem;
-          gap: 0.2rem;
-        }
-
-        :global([data-theme='light']) .dock-theme-switch {
-          background: rgba(0, 0, 0, 0.06);
-        }
-
-        .dock-btn {
-          border: none;
-          background: transparent;
-          color: #94a3b8;
-          font-size: 0.75rem;
-          font-weight: 700;
-          padding: 0.28rem 0.7rem;
-          border-radius: 99px;
-          cursor: pointer;
-          transition: all 0.2s ease;
-          display: flex;
-          align-items: center;
-          gap: 0.3rem;
-        }
-
-        :global([data-theme='light']) .dock-btn {
-          color: #64748b;
-        }
-
-        .dock-btn.active {
-          background: #4f46e5;
-          color: #ffffff;
-          box-shadow: 0 2px 10px rgba(79, 70, 229, 0.45);
-        }
-
-        .dock-divider {
-          width: 1px;
-          height: 18px;
-          background: rgba(255, 255, 255, 0.18);
-        }
-
-        :global([data-theme='light']) .dock-divider {
-          background: rgba(0, 0, 0, 0.12);
-        }
-
-        .dock-group {
-          display: flex;
-          align-items: center;
-          gap: 0.28rem;
-        }
-
-        .dock-pill {
-          background: transparent;
-          border: 1px solid transparent;
-          color: #cbd5e1;
-          font-size: 0.72rem;
-          font-weight: 600;
-          padding: 0.25rem 0.62rem;
-          border-radius: 99px;
-          cursor: pointer;
-          transition: all 0.18s ease;
-        }
-
-        :global([data-theme='light']) .dock-pill {
-          color: #475569;
-        }
-
-        .dock-pill:hover {
-          background: rgba(255, 255, 255, 0.12);
-          color: #ffffff;
-        }
-
-        :global([data-theme='light']) .dock-pill:hover {
-          background: rgba(0, 0, 0, 0.08);
-          color: #0f172a;
-        }
-
-        .dock-pill.active {
-          background: rgba(99, 102, 241, 0.35);
-          border-color: rgba(99, 102, 241, 0.6);
-          color: #ffffff;
-        }
-
-        :global([data-theme='light']) .dock-pill.active {
-          background: rgba(79, 70, 229, 0.15);
-          border-color: rgba(79, 70, 229, 0.3);
-          color: #4f46e5;
-        }
-
-        .sound-pill.active {
-          color: #34d399;
-          background: rgba(16, 185, 129, 0.25);
-          border-color: rgba(16, 185, 129, 0.4);
-        }
-
-        @media (max-width: 960px) {
-          .pixel-floating-dock {
-            top: auto;
-            bottom: 16px;
-            right: 16px;
-            padding: 0.3rem 0.6rem;
-            gap: 0.4rem;
-            box-shadow: 0 10px 36px rgba(0, 0, 0, 0.5);
-          }
-          .dock-btn {
-            padding: 0.22rem 0.55rem;
-            font-size: 0.70rem;
-          }
-          .dock-pill {
-            padding: 0.2rem 0.48rem;
-            font-size: 0.68rem;
-          }
-        }
-      `}</style>
-    </>
+      {/* Sound Toggle */}
+      <button
+        type="button"
+        className={`dock-pill sound-pill ${soundEnabled ? 'active' : ''}`}
+        onClick={toggleSound}
+        title={soundEnabled ? 'Mute 8-bit sound' : 'Enable 8-bit sound effects'}
+      >
+        {soundEnabled ? '🔊 Sound On' : '🔇 Muted'}
+      </button>
+    </div>
   );
 }

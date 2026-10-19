@@ -15,6 +15,7 @@ import json
 import re
 import time
 import warnings
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple, Set
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
@@ -41,10 +42,24 @@ from pipeline.evidence_classifier import (
     classify_evidence_items,
     compute_consensus_and_metrics,
     compute_calibrated_confidence,
+    is_medical_health_claim,
+    detect_medical_guideline_conflict,
 )
 import hashlib
 
+
+def _detect_medical_conflict(claim_text: str, evidence_items: List[Any]) -> bool:
+    """Detect if evidence items contain warnings or conflicting medical guidelines."""
+    if not is_medical_health_claim(claim_text):
+        return False
+    for item in evidence_items:
+        text = f"{getattr(item, 'source_title', '')} {getattr(item, 'snippet', '')} {getattr(item, 'explanation', '')}".lower()
+        if detect_medical_guideline_conflict(claim_text, text):
+            return True
+    return False
+
 _in_memory_verdict_cache = {}
+
 
 def clear_verdict_cache():
     global _in_memory_verdict_cache
@@ -166,9 +181,15 @@ def _is_english(text: str) -> bool:
     return ratio >= 0.75 and hinglish_hits < 2
 
 
+_translation_cache: Dict[str, str] = {}
+
 def translate_claim_to_english(claim_text: str) -> str:
     if _is_english(claim_text):
         return claim_text
+
+    norm = claim_text.strip().lower()
+    if norm in _translation_cache:
+        return _translation_cache[norm]
 
     client = get_llm_client()
     if not client:
@@ -198,6 +219,7 @@ def translate_claim_to_english(claim_text: str) -> str:
             if translated:
                 safe_tr = translated.replace("→", "->").encode("ascii", "replace").decode("ascii")
                 print(f"[search] Translated: '{claim_text[:60]}' -> '{safe_tr[:60]}'")
+                _translation_cache[norm] = translated
                 return translated
     except Exception as e:
         print(f"[search] Translation error: {e}")
@@ -236,9 +258,10 @@ def _keyword_fallback_queries(claim_text: str) -> List[str]:
     if len(clean_claim.split()) <= 10:
         queries.append(clean_claim)
     queries.extend([
+        f"{core_kw} scientific evidence",
+        f"{core_kw} debunked false myth",
+        f"did {core_kw} official records",
         kw,
-        core_kw,
-        f"{core_kw} evidence",
     ])
     return list(dict.fromkeys(queries))
 
@@ -396,7 +419,7 @@ def _ddgs_search(query: str, max_results: int = 8, retries: int = 3) -> List[Dic
     condensed_q = " ".join(words[:12]) if words else clean_q[:80]
 
     def _do_search():
-        with DDGS() as ddgs:
+        with DDGS(timeout=4) as ddgs:
             return list(ddgs.text(condensed_q, max_results=max_results))
 
     res, success = execute_with_resilience("ddg", _do_search)
@@ -415,7 +438,7 @@ def _ddgs_news_search(query: str, max_results: int = 6) -> List[Dict[str, Any]]:
     condensed_q = " ".join(words[:10]) if words else clean_q[:80]
 
     def _do_news():
-        with DDGS() as ddgs:
+        with DDGS(timeout=4) as ddgs:
             try:
                 return list(ddgs.news(condensed_q, max_results=max_results))
             except Exception as e:
@@ -451,10 +474,12 @@ BLOCKED_DOMAINS = {
 
 def _fetch_web_evidence(queries: List[str], claim_text: str = "") -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Collect evidence from NewsAPI (primary) + DuckDuckGo (fallback).
+    Collect evidence from NewsAPI (primary) + DuckDuckGo (fallback) concurrently.
     Filters blocked domains. Caps to max 2 results per domain.
     Returns (evidence_list, search_runs_trace).
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     seen_urls: set = set()
     domain_counts: Dict[str, int] = {}
     evidence: List[Dict[str, Any]] = []
@@ -475,86 +500,120 @@ def _fetch_web_evidence(queries: List[str], claim_text: str = "") -> Tuple[List[
         evidence.append(item)
         return True
 
-    # Step A: NewsAPI — primary news source (single NEWS_API_KEY)
+    # Step A: NewsAPI — primary news source concurrently
+    news_queries = queries[:3]
     news_api_failed = False
-    for query in queries[:3]:
-        if len(evidence) >= 12:
-            break
-        articles = search_newsapi(query, page_size=8, topic=claim_text or query)
-        search_runs.append({
-            "query": query,
-            "source_type": "NewsAPI",
-            "results_found": len(articles) if articles else 0,
-            "top_domain": articles[0]["url"].split("//")[-1].split("/")[0] if articles else "newsapi.org",
-            "trust_level": "high" if articles else "medium",
-            "stance": "neutral",
-        })
-        if not articles:
-            from shared.resilience import get_breaker
-            if get_breaker("newsapi").state == "OPEN" or get_breaker("newsapi").failure_count > 0:
-                news_api_failed = True
-            continue
-        for art in articles:
-            news_raw.append(art)
-            _add(_make_evidence_item(
-                url=art["url"],
-                title=art["title"],
-                snippet=art["snippet"],
-                published=art.get("published_date", ""),
-            ))
+    if news_queries:
+        with ThreadPoolExecutor(max_workers=min(len(news_queries), 3)) as executor:
+            futures = [
+                executor.submit(search_newsapi, q, 8, claim_text or q)
+                for q in news_queries
+            ]
+            for query, fut in zip(news_queries, futures):
+                if len(evidence) >= 12:
+                    break
+                try:
+                    articles = fut.result(timeout=10)
+                except Exception as e:
+                    print(f"[search] News search failed for '{query[:30]}': {e}")
+                    articles = []
+
+                source_name = "NewsData.io" if articles and articles[0].get("source") == "newsdata" else "NewsAPI"
+                search_runs.append({
+                    "query": query,
+                    "source_type": source_name,
+                    "results_found": len(articles) if articles else 0,
+                    "top_domain": articles[0]["url"].split("//")[-1].split("/")[0] if articles else ("newsdata.io" if source_name == "NewsData.io" else "newsapi.org"),
+                    "trust_level": "high" if articles else "medium",
+                    "stance": "neutral",
+                })
+                if not articles:
+                    from shared.resilience import get_breaker
+                    if get_breaker("newsapi").state == "OPEN" or get_breaker("newsapi").failure_count > 0:
+                        news_api_failed = True
+                    continue
+                for art in articles:
+                    news_raw.append(art)
+                    _add(_make_evidence_item(
+                        url=art["url"],
+                        title=art["title"],
+                        snippet=art["snippet"],
+                        published=art.get("published_date", ""),
+                    ))
 
     # Step A2: DuckDuckGo news if API news returned nothing
     if not news_raw:
-        for query in queries[:2]:
-            if len(evidence) >= 10:
-                break
-            ddg_news = _ddgs_news_search(f"{query} news", max_results=6)
-            search_runs.append({
-                "query": f"{query} news",
-                "source_type": "DuckDuckGo News",
-                "results_found": len(ddg_news),
-                "top_domain": ddg_news[0]["domain"] if ddg_news else "duckduckgo.com",
-                "trust_level": "medium",
-                "stance": "neutral",
-            })
-            for art in ddg_news:
-                news_raw.append(art)
-                _add(_make_evidence_item(
-                    url=art["url"],
-                    title=art["title"],
-                    snippet=art["snippet"],
-                    published=art.get("published_date", ""),
-                ))
+        ddg_news_queries = queries[:2]
+        if ddg_news_queries:
+            with ThreadPoolExecutor(max_workers=min(len(ddg_news_queries), 2)) as executor:
+                futures = [
+                    executor.submit(_ddgs_news_search, f"{q} news", 6)
+                    for q in ddg_news_queries
+                ]
+                for query, fut in zip(ddg_news_queries, futures):
+                    if len(evidence) >= 10:
+                        break
+                    try:
+                        ddg_news = fut.result(timeout=8)
+                    except Exception as e:
+                        ddg_news = []
+                    search_runs.append({
+                        "query": f"{query} news",
+                        "source_type": "DuckDuckGo News",
+                        "results_found": len(ddg_news),
+                        "top_domain": ddg_news[0]["domain"] if ddg_news else "duckduckgo.com",
+                        "trust_level": "medium",
+                        "stance": "neutral",
+                    })
+                    for art in ddg_news:
+                        news_raw.append(art)
+                        _add(_make_evidence_item(
+                            url=art["url"],
+                            title=art["title"],
+                            snippet=art["snippet"],
+                            published=art.get("published_date", ""),
+                        ))
         if news_api_failed and not news_raw:
             print("[search] News API key invalid or unavailable — using DuckDuckGo news + web search.")
 
-    # Step C: Always run DuckDuckGo web search to ensure we have evidence
-    for query in queries[:5]:
-        if len(evidence) >= 16:
-            break
-        results = _ddgs_search(query, max_results=8)
-        search_runs.append({
-            "query": query,
-            "source_type": "DuckDuckGo Web",
-            "results_found": len(results),
-            "top_domain": results[0].get("href", "").split("//")[-1].split("/")[0] if results else "duckduckgo.com",
-            "trust_level": "medium",
-            "stance": "neutral",
-        })
-        if not results:
-            from shared.resilience import get_breaker
-            if get_breaker("ddg").state == "OPEN" and not evidence:
-                _add(_make_unavailable_placeholder("duckduckgo", "DuckDuckGo Web Search Unavailable", "duckduckgo.com"))
-        else:
-            for res in results:
-                url = res.get("href", "").strip()
-                if not url:
-                    continue
-                _add(_make_evidence_item(
-                    url=url,
-                    title=res.get("title", ""),
-                    snippet=res.get("body", ""),
-                ))
+    # Step C: Always run DuckDuckGo web search concurrently across queries
+    web_queries = queries[:5]
+    if web_queries:
+        with ThreadPoolExecutor(max_workers=min(len(web_queries), 5)) as executor:
+            futures = [
+                executor.submit(_ddgs_search, q, 8)
+                for q in web_queries
+            ]
+            for query, fut in zip(web_queries, futures):
+                if len(evidence) >= 16:
+                    break
+                try:
+                    results = fut.result(timeout=10)
+                except Exception as e:
+                    print(f"[search] DDGS search failed for '{query[:30]}': {e}")
+                    results = []
+                search_runs.append({
+                    "query": query,
+                    "source_type": "DuckDuckGo Web",
+                    "results_found": len(results),
+                    "top_domain": results[0].get("href", "").split("//")[-1].split("/")[0] if results else "duckduckgo.com",
+                    "trust_level": "medium",
+                    "stance": "neutral",
+                })
+                if not results:
+                    from shared.resilience import get_breaker
+                    if get_breaker("ddg").state == "OPEN" and not evidence:
+                        _add(_make_unavailable_placeholder("duckduckgo", "DuckDuckGo Web Search Unavailable", "duckduckgo.com"))
+                else:
+                    for res in results:
+                        url = res.get("href", "").strip()
+                        if not url:
+                            continue
+                        _add(_make_evidence_item(
+                            url=url,
+                            title=res.get("title", ""),
+                            snippet=res.get("body", ""),
+                        ))
 
     print(f"[search] Total raw evidence collected: {len(evidence)} items (news: {len(news_raw)})")
     return evidence[:15], search_runs
@@ -565,24 +624,21 @@ def _fetch_web_evidence(queries: List[str], claim_text: str = "") -> Tuple[List[
 _LLM_SYSTEM_PROMPT = """\
 You are a rigorous, impartial, world-class fact-checker.
 
-Given a factual claim and a list of web/news/Wikipedia sources, your job is to determine whether the claim is TRUE, FALSE, or MISLEADING.
+Given a factual claim and a list of retrieved sources, determine whether the evidence supports, partly supports, contradicts, or cannot resolve the claim.
 
 CRITICAL INSTRUCTIONS:
 1. Carefully analyze each evidence item. Check whether it directly addresses the claim or discusses an unrelated topic.
 2. DISREGARD IRRELEVANT SOURCES: Do NOT treat an article about an unrelated topic (e.g. rat control or plant rashes when evaluating whether humans can produce poison) as evidence that the claim is false!
-3. STRICT VERDICT GUIDELINES:
-   - TRUE: Sufficient reliable evidence supports the claim (directly confirms the fact, scientific reality, study findings, or technical capability).
-   - FALSE: The claim is affirmatively contradicted, disproven, physically/scientifically impossible, an unfounded hoax, or contradicted by established reality.
-   - MISLEADING: The claim contains a materially distorted, exaggerated, overgeneralized, or only partially true assertion (e.g. asserting 'someone with a dog will save the dog over a stranger' when a study only found 40% in a hypothetical dilemma, or missing critical context).
-4. NO UNVERIFIABLE / NO 'NO VERDICT':
-   - Every claim MUST be decisively resolved to one of three verdicts: "true", "false", or "misleading".
-   - Under no circumstances output "unverifiable" or "unverified".
-   - If the provided web snippets do not have full coverage, synthesize the evidence with your comprehensive scientific, historical, psychological, and encyclopedic knowledge to make a definitive determination.
-5. For each cited evidence item, use its EXACT source_url and source_title from the provided list.
+3. Verdict guidelines:
+   - TRUE requires directly relevant, credible supporting evidence.
+   - FALSE requires directly relevant, credible counterevidence.
+   - MISLEADING requires evidence for a bounded part of the claim plus material missing context, overstatement, or conflict.
+   - UNVERIFIED is required when the supplied evidence is insufficient. Never infer a verdict from missing evidence or model knowledge.
+4. Cite only URLs supplied in the evidence list. Do not invent a citation, a passage, an article title, or a fact not present in those sources.
 
 Return ONLY valid JSON (no markdown, no preamble):
 {
-  "label": "true" | "false" | "misleading",
+  "label": "true" | "false" | "misleading" | "unverified",
   "confidence": 0.0–1.0,
   "reasoning": "2-4 sentence explanation detailing the evidence and justification.",
   "summary": "One-sentence concise verdict.",
@@ -593,7 +649,7 @@ Return ONLY valid JSON (no markdown, no preamble):
       "domain": "<domain>",
       "snippet": "<relevant excerpt>",
       "relevance_score": 0.0–1.0,
-      "stance": "supports" | "contradicts" | "mixed" | "insufficient" | "irrelevant",
+      "stance": "supports" | "partially_supports" | "contradicts" | "neutral" | "unrelated" | "insufficient",
       "supports_claim": true | false
     }
   ]
@@ -643,10 +699,17 @@ def _llm_knowledge_factcheck(
     english_claim: str,
     transcript_text: str,
 ) -> Dict[str, Any]:
-    """
-    Fallback fact-check using LLM's own knowledge when all search APIs fail.
-    Produces real reasoning and evidence descriptions.
-    """
+    """Fail closed when retrieval is unavailable; model memory is not citable evidence."""
+    return {
+        "label": "unverified",
+        "confidence": 0.2,
+        "reasoning": "No claim-relevant, URL-backed evidence was retrieved. TruthLens does not use model memory as a citation.",
+        "summary": "Unverified: external evidence was unavailable.",
+        "evidence": [],
+    }
+
+    # Kept below temporarily for a low-risk rollback diff. The return above is
+    # intentional: this code must never manufacture citations from an LLM.
     client = get_llm_client()
     if not client:
         return {
@@ -703,8 +766,7 @@ def _llm_knowledge_factcheck(
                     "supports_claim": ev.get("supports_claim", False),
                 })
             parsed["evidence"] = evidence_items
-            if parsed.get("label", "").lower() in ("unverifiable", "unverified"):
-                parsed["label"] = "misleading"
+            parsed["label"] = _canonical_verdict_label(parsed.get("label", "unverified"))
             # Lower confidence slightly since this is knowledge-based, not search-verified
             if "confidence" in parsed:
                 parsed["confidence"] = round(min(parsed["confidence"], 0.85), 3)
@@ -716,10 +778,10 @@ def _llm_knowledge_factcheck(
         print(f"[search] Knowledge-based fact-check error: {e}")
 
     return {
-        "label": "misleading",
-        "confidence": 0.45,
-        "reasoning": "Web search APIs were unavailable. The claim could not be verified against external sources.",
-        "summary": "Inconclusive — evaluated with available context.",
+        "label": "unverified",
+        "confidence": 0.20,
+        "reasoning": "External search APIs and knowledge models were unavailable or insufficient to substantiate this claim.",
+        "summary": "Unverified — insufficient evidence to substantiate or refute the claim.",
         "evidence": [],
     }
 
@@ -781,15 +843,18 @@ def _run_llm_reasoning(
     if not parsed:
         print(f"[search] LLM parse failed. Raw (first 300): {raw[:300]}")
         return {
-            "label": "false",
-            "confidence": 0.4,
+            "label": "unverified",
+            "confidence": 0.2,
             "reasoning": "LLM returned an unparseable response. Evidence collected but could not determine verdict.",
             "summary": "Could not determine verdict automatically.",
-            "evidence": web_evidence,
+            "evidence": [],
         }
 
     # ── Validate & clean evidence citations ──────────────────────────────────
-    real_url_map: Dict[str, Dict] = {e["source_url"]: e for e in web_evidence}
+    real_url_map: Dict[str, Dict] = {
+        e["source_url"]: e for e in web_evidence
+        if not e.get("service_unavailable") and not (e.get("source_url") or "").endswith("/unavailable")
+    }
     clean_ev: List[Dict] = []
 
     for ev in parsed.get("evidence", []):
@@ -797,18 +862,42 @@ def _run_llm_reasoning(
         if ev_url in real_url_map:
             base = real_url_map[ev_url].copy()
             base["supports_claim"] = ev.get("supports_claim", None)
-            base["snippet"] = ev.get("snippet") or base.get("snippet", "")
+            # Retain original authentic snippet to prevent model-fabricated quotes
+            original_snippet = base.get("snippet", "")
+            base["snippet"] = original_snippet
+            base["relevant_passage"] = ev.get("snippet") or base.get("relevant_passage") or original_snippet
             if ev.get("relevance_score"):
-                base["relevance_score"] = ev["relevance_score"]
+                base["relevance_score"] = float(ev["relevance_score"])
             clean_ev.append(base)
 
-    # If LLM cited nothing valid, fall back to all collected web evidence
+    # If LLM cited nothing valid or only fabricated URLs, return unverified
     if not clean_ev:
-        print("[search] LLM cited no valid URLs — using all collected web evidence as fallback")
-        clean_ev = web_evidence
+        parsed["label"] = "unverified"
+        parsed["confidence"] = min(float(parsed.get("confidence", 0.2)), 0.25)
+        parsed["reasoning"] = "The model did not map its conclusion to a retrieved, verified source URL; no evidence-backed verdict was issued."
+        parsed["evidence"] = []
+        return parsed
 
     parsed["evidence"] = clean_ev
     return parsed
+
+
+def _canonical_verdict_label(label: Any) -> str:
+    """Normalize legacy/provider labels to the strict 3-verdict taxonomy: true, false, misleading."""
+    value = str(label or "").strip().lower()
+    return {
+        "supported": "true",
+        "verified": "true",
+        "contradicted": "false",
+        "partially_supported": "misleading",
+        "ambiguous": "misleading",
+        "unverifiable": "misleading",
+        "unverified": "misleading",
+        "partial": "misleading",
+        "true": "true",
+        "false": "false",
+        "misleading": "misleading",
+    }.get(value, "misleading")
 
 
 def _keyword_verdict_from_evidence(
@@ -826,47 +915,46 @@ def _keyword_verdict_from_evidence(
     if web_evidence is None:
         web_evidence = []
 
-    false_kw = ["false", "debunked", "misinformation", "myth", "incorrect", "not recommended", "avoid", "do not"]
-    true_kw = ["confirmed", "recommended", "true", "verified", "correct", "effective", "approved", "evidence shows"]
-    support = contradict = 0
-    for ev in web_evidence:
-        stance = str(ev.get("stance", "")).lower()
-        if ev.get("supports_claim") is True or stance in ("supports", "evidencestance.supports"):
-            support += 1
-        elif ev.get("supports_claim") is False or stance in ("contradicts", "evidencestance.contradicts"):
-            contradict += 1
+    classified, rejected = classify_evidence_items(english_claim, web_evidence)
+    metrics = compute_consensus_and_metrics(classified, rejected)
+    support = metrics["support_count"]
+    contradict = metrics["contradict_count"]
+    mixed = metrics.get("mixed_count", 0)
+    if not metrics["valid_count"]:
+        label = "misleading"
+        summary = "Unverified: retrieved sources did not contain claim-relevant evidence. Missing evidence does not prove the claim false."
+    elif (support > 0 and contradict > 0) or mixed > 0:
+        label = "misleading"
+        summary = "Misleading: independent evidence contains mixed, nuanced, or conflicting findings."
+    elif support > contradict and support >= 1:
+        if is_medical_health_claim(english_claim) and _detect_medical_conflict(english_claim, classified):
+            label = "misleading"
+            summary = "Medical guidelines or regulatory agencies do not corroborate this health claim."
         else:
-            text = f"{ev.get('source_title', '')} {ev.get('snippet', '')}".lower()
-            if any(k in text for k in false_kw):
-                contradict += 1
-                ev["supports_claim"] = False
-            elif any(k in text for k in true_kw):
-                support += 1
-                ev["supports_claim"] = True
-
-    if contradict > support:
-        label, summary = "false", "Evidence suggests this claim is contradicted or disproven."
-        confidence = 0.55
-    elif support > contradict:
-        label, summary = "true", "Evidence supports this claim."
-        confidence = 0.55
-    elif support == contradict == 0:
-        label, summary = "misleading", "Evidence was inconclusive across web sources (LLM rate-limited)."
-        confidence = 0.50
+            label = "true"
+            summary = "Supported by the retrieved claim-relevant evidence."
+    elif contradict > support:
+        label = "false"
+        summary = "Contradicted by the retrieved claim-relevant evidence."
     else:
-        label, summary = "misleading", "Mixed evidence found for this claim."
-        confidence = 0.50
-
+        label = "misleading"
+        summary = "Unverified: no decisive evidence stance was established. Missing evidence does not prove the claim false."
+    base_conf = 0.85 if metrics["consensus_score"] >= 0.90 else 0.70 if metrics["consensus_score"] >= 0.70 else 0.55
+    confidence = compute_calibrated_confidence(label, classified, metrics["consensus_score"], base_conf)
+    if not metrics["valid_count"]:
+        reasoning = f"Unverified: Insufficient evidence found to verify this claim. Missing evidence does not prove the claim false. ({error_msg[:100]})"
+    else:
+        reasoning = (
+            f"Verifier fallback after: {error_msg[:120]}. Evidence classifier found "
+            f"{support} supporting and {contradict} contradicting independent passages."
+        )
     return {
         "label": label,
         "confidence": confidence,
-        "reasoning": (
-            f"Groq LLM was rate-limited ({error_msg[:120]}). "
-            f"Fallback keyword analysis of {len(web_evidence)} sources: "
-            f"{support} supporting, {contradict} contradicting."
-        ),
+        "reasoning": reasoning,
         "summary": summary,
-        "evidence": web_evidence,
+        "evidence": [item.model_dump() for item in classified],
+        "unverified": not bool(metrics["valid_count"]),
     }
 
 
@@ -951,21 +1039,11 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
         metrics = compute_consensus_and_metrics(classified_items, rejected_items, len(executed_queries), retrieval_rounds)
         return {
             "label": "misleading",
-            "confidence": 0.40,
-            "reasoning": "No LLM client or API keys configured. Using transcript context fallback.",
-            "summary": "Evaluated using transcript context fallback.",
-            "evidence": [
-                {
-                    "source_url": "https://video.transcript",
-                    "source_title": "Video Transcript Context",
-                    "domain": "video.transcript",
-                    "snippet": transcript[:400],
-                    "content_source": "transcript_context",
-                    "relevance_score": 1.0,
-                    "supports_claim": None,
-                    "stance": "insufficient",
-                }
-            ],
+            "unverified": True,
+            "confidence": 0.2,
+            "reasoning": "Unverified: No verifier model is configured. A transcript is claim context, not independent evidence. Missing evidence does not prove the claim false.",
+            "summary": "Unverified: no evidence-backed verification was completed.",
+            "evidence": [],
             "search_runs": search_runs_trace,
             "fact_check_summary": metrics,
             "queries_executed": executed_queries,
@@ -975,18 +1053,31 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
 
     # ── Step 3: Epistemic Decision Engine ──
     # Filter for items accepted for LLM reasoning (drop completely irrelevant/rejected items)
-    accepted_for_llm = [item for item in classified_items if item.stance != EvidenceStance.IRRELEVANT]
+    accepted_for_llm = [
+        item for item in classified_items
+        if item.stance in (EvidenceStance.SUPPORTS, EvidenceStance.PARTIALLY_SUPPORTS, EvidenceStance.CONTRADICTS)
+    ]
 
-    # Rule 1: No relevant evidence in web search -> Fall back to Knowledge Fact-Check (never UNVERIFIABLE)
+    # Rule 1: No relevant evidence in web search -> MISLEADING (Unverified: Never infer a verdict without direct evidence)
     if not accepted_for_llm:
-        print(f"[search] No direct web evidence found after {retrieval_rounds} rounds. Falling back to AI Knowledge Fact-Check...")
-        res = _llm_knowledge_factcheck(claim, english_claim, transcript)
+        print(f"[search] No direct, claim-relevant web evidence found after {retrieval_rounds} rounds. Returning MISLEADING (Unverified).")
         metrics = compute_consensus_and_metrics(classified_items, rejected_items, len(executed_queries), retrieval_rounds)
-        res["fact_check_summary"] = metrics
-        res["search_runs"] = search_runs_trace
-        res["queries_executed"] = executed_queries
-        res["retrieval_rounds"] = retrieval_rounds
-        res["stopping_reason"] = "no_web_matches_knowledge_fallback"
+        from pipeline.canonical_record import compute_canonical_hash
+        c_hash = compute_canonical_hash(english_claim, transcript)
+        res = {
+            "label": "misleading",
+            "unverified": True,
+            "confidence": 0.20,
+            "reasoning": "Unverified: No claim-relevant, URL-backed evidence was retrieved. Verdict cannot be established without direct corroboration. Missing evidence does not prove the claim false.",
+            "summary": "Unverified: external evidence was insufficient or unavailable to establish a verdict.",
+            "evidence": [],
+            "fact_check_summary": metrics,
+            "search_runs": search_runs_trace,
+            "queries_executed": executed_queries,
+            "retrieval_rounds": retrieval_rounds,
+            "stopping_reason": "no_claim_relevant_evidence",
+            "canonical_hash": c_hash,
+        }
         set_cached_verdict(claim, res)
         return res
 
@@ -996,30 +1087,7 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
         result = _run_llm_reasoning(claim, english_claim, transcript, accepted_dicts)
 
         # ── Step 4: Epistemic Decision Rules Guard ──
-        # Check LLM stance consistency and enforce NO UNVERIFIABLE
-        supports_in_accepted = sum(1 for item in accepted_for_llm if item.stance == EvidenceStance.SUPPORTS)
-        contradicts_in_accepted = sum(1 for item in accepted_for_llm if item.stance == EvidenceStance.CONTRADICTS)
-
-        llm_label = result.get("label", "misleading").lower()
-        if llm_label in ("unverifiable", "unverified"):
-            # Enforce NO UNVERIFIABLE rule: re-check with knowledge base
-            print("[search] LLM returned unverifiable. Re-evaluating via knowledge fact-check to reach definitive verdict...")
-            fb_res = _llm_knowledge_factcheck(claim, english_claim, transcript)
-            fb_label = fb_res.get("label", "").lower()
-            if fb_label not in ("unverifiable", "unverified", ""):
-                result["label"] = fb_label
-                result["summary"] = fb_res.get("summary", result.get("summary"))
-                result["reasoning"] = fb_res.get("reasoning", result.get("reasoning"))
-                if fb_res.get("evidence"):
-                    result["evidence"] = fb_res["evidence"]
-            else:
-                result["label"] = "misleading"
-                result["summary"] = "The claim is partially supported or missing critical context."
-        elif llm_label == "false":
-            if contradicts_in_accepted == 0 and supports_in_accepted > 0:
-                print("[search] Overriding erroneous negative-inference FALSE to TRUE based on supporting evidence.")
-                result["label"] = "true"
-                result["summary"] = "The claim is supported by factual and scientific evidence."
+        raw_label = _canonical_verdict_label(result.get("label"))
 
         # Map LLM citations back to classified items
         llm_stance_map = {}
@@ -1030,14 +1098,102 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
 
         # Re-classify and compute consensus
         reclassified_items, _ = classify_evidence_items(english_claim, accepted_dicts, llm_stance_map=llm_stance_map)
+
+        valid_supports = [
+            item for item in reclassified_items
+            if item.stance == EvidenceStance.SUPPORTS and item.relevance_score >= 0.50
+        ]
+        valid_contradicts = [
+            item for item in reclassified_items
+            if item.stance == EvidenceStance.CONTRADICTS and item.relevance_score >= 0.50
+        ]
+        has_med_conflict = _detect_medical_conflict(english_claim, reclassified_items)
+
+        final_label = raw_label
+
+        # RULE 1: Never label a claim TRUE without sufficient direct evidence
+        if final_label == "true":
+            if valid_contradicts and not valid_supports:
+                final_label = "false"
+                result["summary"] = "The claim is refuted by verifiable counterevidence."
+            elif valid_contradicts and valid_supports:
+                if len(valid_contradicts) >= len(valid_supports) or len(valid_contradicts) >= 2:
+                    final_label = "misleading"
+                    result["summary"] = "The claim is disputed with conflicting findings across credible sources."
+            elif has_med_conflict:
+                final_label = "misleading"
+                result["summary"] = "Medical guidelines or clinical evidence conflict with or do not substantiate this health claim."
+            elif not valid_supports:
+                final_label = "misleading"
+                result["summary"] = "Unverified: retrieved sources contain related context but lack direct evidence confirming this claim. Missing evidence does not prove the claim false."
+                result["reasoning"] = (
+                    "Unverified: Insufficient direct evidence to establish this claim as true. Missing evidence does not prove the claim false. "
+                    + result.get("reasoning", "")
+                ).strip()
+
+        # RULE 2: Medical claims with conflicting guidelines cannot be TRUE
+        elif is_medical_health_claim(english_claim) and has_med_conflict:
+            if final_label != "false":
+                final_label = "misleading"
+                result["summary"] = "Conflicting medical guidelines or lack of clinical authorization."
+
+        # RULE 3: Contradicted label consistency check
+        elif final_label == "false":
+            if not valid_contradicts and valid_supports:
+                final_label = "true"
+                result["summary"] = "The claim is supported by factual and scientific evidence."
+            elif not valid_contradicts and not valid_supports:
+                final_label = "misleading"
+                result["summary"] = "Unverified: insufficient direct counterevidence to definitively refute this claim. Missing evidence does not prove the claim false."
+
+        final_label = _canonical_verdict_label(final_label)
+        result["label"] = final_label
+
         metrics = compute_consensus_and_metrics(reclassified_items, rejected_items, len(executed_queries), retrieval_rounds)
         consensus_score = metrics["consensus_score"]
 
         # Compute calibrated confidence
-        final_label = result.get("label", "misleading")
         base_conf = float(result.get("confidence", 0.75))
         calibrated_conf = compute_calibrated_confidence(final_label, reclassified_items, consensus_score, base_conf)
         result["confidence"] = calibrated_conf
+
+        # Enrich evidence items with original source page verification and quotations
+        from pipeline.page_fetcher import fetch_page_text, verify_and_locate_quote
+        from pipeline.canonical_record import compute_canonical_hash, save_canonical_record
+
+        enriched_evidence = []
+        for c_item in reclassified_items:
+            item_dict = c_item.model_dump()
+            url = item_dict.get("source_url", "")
+            snippet = item_dict.get("snippet", "")
+            p_text = fetch_page_text(url, timeout=3.0) if url else None
+            is_v, quote_text, loc = verify_and_locate_quote(p_text, snippet)
+            item_dict["quote"] = quote_text or snippet
+            item_dict["quote_verified"] = is_v
+            item_dict["quote_location"] = loc
+            item_dict["publisher"] = item_dict.get("domain", "")
+            item_dict["retrieval_timestamp"] = datetime.now(timezone.utc).isoformat()
+            enriched_evidence.append(item_dict)
+
+        result["evidence"] = enriched_evidence
+
+        # Canonical Record and reproducible tokening
+        c_hash = compute_canonical_hash(english_claim, transcript)
+        result["canonical_hash"] = c_hash
+        save_canonical_record({
+            "canonical_hash": c_hash,
+            "original_wording": claim,
+            "normalized_claim": english_claim,
+            "context": transcript,
+            "final_verdict": final_label,
+            "confidence": calibrated_conf,
+            "consensus_score": consensus_score,
+            "reasoning": result.get("reasoning", ""),
+            "summary": result.get("summary", ""),
+            "evidence": enriched_evidence,
+            "search_queries": executed_queries,
+            "retrieval_rounds": retrieval_rounds,
+        })
 
         # Attach auditable fields
         result["fact_check_summary"] = metrics
@@ -1045,7 +1201,6 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
         result["queries_executed"] = executed_queries
         result["retrieval_rounds"] = retrieval_rounds
         result["stopping_reason"] = stopping_reason
-        result["evidence"] = [item.model_dump() for item in reclassified_items]
 
         set_cached_verdict(claim, result)
         return result
@@ -1063,9 +1218,10 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
             return fb
         return {
             "label": "misleading",
-            "confidence": 0.40,
-            "reasoning": f"LLM reasoning encountered an error: {e}. Evaluated based on available context.",
-            "summary": "Could not complete full verification due to processing error — marked as misleading.",
+            "unverified": True,
+            "confidence": 0.20,
+            "reasoning": f"Verification pipeline encountered an error: {e}. External evidence was insufficient or inaccessible. Missing evidence does not prove the claim false.",
+            "summary": "Unverified: evidence was insufficient or inaccessible to reach a verdict.",
             "evidence": [item.model_dump() for item in classified_items[:4]],
             "fact_check_summary": metrics,
             "search_runs": search_runs_trace,

@@ -125,8 +125,8 @@ async def export_job_dossier(job_id: str, format: str = "json"):
     from fastapi.responses import PlainTextResponse
 
     demo = None
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             demo = case
             break
 
@@ -179,14 +179,25 @@ async def export_job_dossier(job_id: str, format: str = "json"):
         )
         return PlainTextResponse(content=md_text, media_type="text/markdown")
 
+    import hashlib
+    import datetime
+    content_to_hash = f"{job_data['id']}:{job_data['video_url']}:{job_data['overall_verdict']}:{job_data['overall_confidence']}:{len(job_data['claims'])}"
+    audit_hash = hashlib.sha256(content_to_hash.encode("utf-8")).hexdigest()[:16].upper()
+    job_data["dossier_metadata"] = {
+        "export_version": "1.0.0",
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "audit_hash": f"SHA256-{audit_hash}",
+        "schema": "truthlens.dossier.v1"
+    }
+
     return job_data
 
 
 @router.get("/{job_id}")
 async def get_job(job_id: str):
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case
     if job_id not in jobs_db:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -195,55 +206,65 @@ async def get_job(job_id: str):
 @router.get("/{job_id}/claims")
 async def get_claims(job_id: str):
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case.get("claims", [])
-    if job_id not in claims_verdicts_db:
+    if job_id in claims_verdicts_db:
+        return claims_verdicts_db[job_id]
+    if job_id in jobs_db:
         return []
-    return claims_verdicts_db[job_id]
+    raise HTTPException(status_code=404, detail="Job not found")
 
 @router.get("/{job_id}/transcript")
 async def get_transcript(job_id: str):
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case.get("transcript", [])
-    if job_id not in transcripts_db:
+    if job_id in transcripts_db:
+        return transcripts_db[job_id]
+    if job_id in jobs_db:
         return []
-    return transcripts_db[job_id]
+    raise HTTPException(status_code=404, detail="Job not found")
 
 @router.get("/{job_id}/forensics")
 async def get_forensics(job_id: str):
-    """Return the full forensics analysis report for a completed job."""
+    """Return the full forensics analysis report for a job."""
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case.get("forensics", {})
-    if job_id not in forensics_db:
-        raise HTTPException(status_code=404, detail="Forensics report not found or not yet generated")
-    return forensics_db[job_id]
+    if job_id in forensics_db:
+        return forensics_db[job_id]
+    if job_id in jobs_db:
+        return {}
+    raise HTTPException(status_code=404, detail="Job not found")
 
 @router.get("/{job_id}/osint")
 async def get_osint(job_id: str):
-    """Return the OSINT collection report for a completed job."""
+    """Return the OSINT collection report for a job."""
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case.get("osint", {})
-    if job_id not in osint_db:
-        raise HTTPException(status_code=404, detail="OSINT report not found or not yet generated")
-    return osint_db[job_id]
+    if job_id in osint_db:
+        return osint_db[job_id]
+    if job_id in jobs_db:
+        return {}
+    raise HTTPException(status_code=404, detail="Job not found")
 
 @router.get("/{job_id}/dm_report")
 async def get_dm_report(job_id: str):
-    """Return the Data Mining analysis report for a completed job."""
+    """Return the Data Mining analysis report for a job."""
     from backend.services.demo_cases import DEMO_CASES
-    for case in DEMO_CASES.values():
-        if case["id"] == job_id:
+    for key, case in DEMO_CASES.items():
+        if case.get("id") == job_id or key == job_id:
             return case.get("dm_report", {})
-    if job_id not in dm_db:
-        raise HTTPException(status_code=404, detail="DM report not found or not yet generated")
-    return dm_db[job_id]
+    if job_id in dm_db:
+        return dm_db[job_id]
+    if job_id in jobs_db:
+        return {}
+    raise HTTPException(status_code=404, detail="Job not found")
 
 
 @router.get("/{job_id}/stream")

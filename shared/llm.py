@@ -12,6 +12,9 @@ import os
 import re
 import time
 import threading
+import json
+from types import SimpleNamespace
+from urllib import request, error
 from typing import Any, Optional
 
 try:
@@ -27,8 +30,51 @@ _last_groq_call = 0.0
 _MIN_GROQ_INTERVAL = float(os.getenv("GROQ_MIN_INTERVAL_SEC", "1.0"))
 
 
+class _MistralCompletions:
+    """Minimal OpenAI-compatible Mistral client; keeps provider details out of callers."""
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def create(self, **kwargs) -> Any:
+        payload = json.dumps({
+            "model": kwargs.get("model") or get_llm_model(),
+            "messages": kwargs.get("messages", []),
+            "temperature": kwargs.get("temperature", 0),
+            "max_tokens": kwargs.get("max_tokens", 1024),
+        }).encode("utf-8")
+        req = request.Request(
+            "https://api.mistral.ai/v1/chat/completions",
+            data=payload,
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=kwargs.get("timeout", 45)) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Mistral HTTP {exc.code}: {body[:300]}") from exc
+        choices = [SimpleNamespace(message=SimpleNamespace(content=item.get("message", {}).get("content", ""))) for item in data.get("choices", [])]
+        return SimpleNamespace(choices=choices)
+
+
+_mistral_cooldown_until = 0.0
+
+
+class MistralClient:
+    _provider = "mistral"
+
+    def __init__(self, api_key: str):
+        self.chat = SimpleNamespace(completions=_MistralCompletions(api_key))
+
+
 def get_llm_client() -> Optional[Any]:
-    """Returns a Groq client using the next available key from rotation."""
+    """Return Mistral when configured and not cooling down, otherwise the existing rotating Groq client."""
+    global _mistral_cooldown_until
+    provider_pref = os.getenv("LLM_PROVIDER", "").strip().lower()
+    mistral_key = os.getenv("MISTRAL_API_KEY", "").strip()
+    if provider_pref != "groq" and mistral_key and time.time() >= _mistral_cooldown_until:
+        return MistralClient(mistral_key)
     if not Groq:
         return None
     manager = get_api_key_manager()
@@ -50,19 +96,35 @@ def get_llm_client_with_key() -> tuple:
 
 
 def get_groq_fallback_client() -> Optional[Any]:
-    return get_llm_client()
+    """Always returns a Groq client (bypasses MISTRAL_API_KEY) — used for provider-level fallback."""
+    if not Groq:
+        return None
+    manager = get_api_key_manager()
+    key = manager.get_groq_key()
+    if key:
+        return Groq(api_key=key)
+    return None
 
 
 def get_llm_model() -> str:
+    global _mistral_cooldown_until
+    provider_pref = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider_pref != "groq" and os.getenv("MISTRAL_API_KEY", "").strip() and time.time() >= _mistral_cooldown_until:
+        return os.getenv("MISTRAL_MODEL", "mistral-small-latest")
     return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 
 def get_fallback_llm_model() -> str:
+    """Returns the fallback model name appropriate for the active provider."""
+    global _mistral_cooldown_until
+    provider_pref = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider_pref != "groq" and os.getenv("MISTRAL_API_KEY", "").strip() and time.time() >= _mistral_cooldown_until:
+        return os.getenv("MISTRAL_FALLBACK_MODEL", "mistral-small-latest")
     return os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
 
 
 def get_groq_model() -> str:
-    return get_llm_model()
+    return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 
 def _parse_retry_seconds(error_msg: str) -> float:
@@ -121,9 +183,29 @@ def call_llm_with_fallback(client: Any, **kwargs) -> Any:
     3. On auth failure → mark key invalid, rotate to next key
     4. On other errors → try fallback model
     """
+    global _mistral_cooldown_until
+    if not client:
+        client = get_llm_client()
+        if not client:
+            raise RuntimeError("No LLM client available — check GROQ_API_KEY / MISTRAL_API_KEY in .env")
+
+    if getattr(client, "_provider", "") == "mistral":
+        try:
+            return _create_completion(client, kwargs, max_retries=1)
+        except Exception as mistral_error:
+            _mistral_cooldown_until = time.time() + 600.0  # 10 min cooldown on failure
+            print(f"[llm] Mistral unavailable ({mistral_error}) — falling back to Groq multi-key manager")
+            client = get_groq_fallback_client()
+            if not client:
+                raise mistral_error
+            # Client is now Groq — execution seamlessly continues to key-rotation logic below
+
+
     manager = get_api_key_manager()
-    primary_model = kwargs.get("model") or get_llm_model()
-    fallback_model = get_fallback_llm_model()
+    primary_model = kwargs.get("model") or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    if "mistral" in primary_model.lower():
+        primary_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    fallback_model = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
 
     # Extract the key from the current client (if possible) for tracking
     current_key = getattr(client, '_api_key', None) or getattr(getattr(client, '_client', None), 'api_key', None)

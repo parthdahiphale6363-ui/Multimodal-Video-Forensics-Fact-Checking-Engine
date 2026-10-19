@@ -149,12 +149,15 @@ def search_newsapi(query: str, page_size: int = 10, topic: str = "") -> List[Dic
     filter_topic = topic or clean_query
     results: List[Dict[str, Any]] = []
 
+    from shared.resilience import get_breaker
+
     # Step 1: Try NewsAPI.org (primary)
     newsapi_key = get_news_api_key()
-    if newsapi_key:
+    newsapi_breaker = get_breaker("newsapi")
+    if newsapi_key and newsapi_breaker.can_execute():
         results = _fetch_from_newsapi_org(clean_query, newsapi_key, page_size)
-        if not results and len(clean_query.split()) > 2:
-            # Broaden to core 2-keyword query if initial query returned 0
+        if not results and newsapi_breaker.can_execute() and len(clean_query.split()) > 2:
+            # Broaden to core 2-keyword query only if initial query was an empty result (not rate-limited)
             broader_query = " ".join(clean_query.split()[:2])
             results = _fetch_from_newsapi_org(broader_query, newsapi_key, page_size)
             
@@ -162,14 +165,17 @@ def search_newsapi(query: str, page_size: int = 10, topic: str = "") -> List[Dic
             filtered = filter_relevant_news(results, filter_topic)
             if filtered:
                 return filtered
-        print("[news] NewsAPI.org returned no results — trying NewsData.io fallback...")
+        if newsapi_breaker.can_execute():
+            print("[news] NewsAPI.org returned no results — trying NewsData.io fallback...")
+        else:
+            print("[news] NewsAPI.org quota reached (429) — routing seamlessly to NewsData.io fallback...")
 
     # Step 2: Try NewsData.io (secondary)
     newsdata_key = get_newsdata_api_key()
-    if newsdata_key:
+    newsdata_breaker = get_breaker("newsdata")
+    if newsdata_key and newsdata_breaker.can_execute():
         results = _fetch_from_newsdata_io(clean_query, newsdata_key, page_size)
-        if not results and len(clean_query.split()) > 2:
-            # Broaden to core 2-keyword query if initial query returned 0
+        if not results and newsdata_breaker.can_execute() and len(clean_query.split()) > 2:
             broader_query = " ".join(clean_query.split()[:2])
             results = _fetch_from_newsdata_io(broader_query, newsdata_key, page_size)
             
@@ -178,7 +184,7 @@ def search_newsapi(query: str, page_size: int = 10, topic: str = "") -> List[Dic
             if filtered:
                 return filtered
         print("[news] NewsData.io also returned no results.")
-    elif not newsapi_key:
+    elif not newsapi_key and not newsdata_key:
         print("[news] No news API keys configured — skipping news search.")
 
     return filter_relevant_news(results, filter_topic)

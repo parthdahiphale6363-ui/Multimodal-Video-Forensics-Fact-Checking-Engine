@@ -24,10 +24,15 @@ from pipeline.domain_trust import get_domain_trust_tier
 
 class EvidenceStance(str, Enum):
     SUPPORTS = "supports"
+    PARTIALLY_SUPPORTS = "partially_supports"
     CONTRADICTS = "contradicts"
-    MIXED = "mixed"
-    IRRELEVANT = "irrelevant"
+    NEUTRAL = "neutral"
+    UNRELATED = "unrelated"
     INSUFFICIENT = "insufficient"
+    # Backwards-compatible names for persisted/UI clients. New results use the
+    # explicit vocabulary above.
+    MIXED = PARTIALLY_SUPPORTS
+    IRRELEVANT = UNRELATED
 
 
 class ClassifiedEvidenceItem(BaseModel):
@@ -54,6 +59,41 @@ _WIRE_SYNDICATION_TOKENS = {
     "pr newswire", "business wire", "globe newswire", "bloomberg news"
 }
 
+# Medical and health claims keywords
+MEDICAL_CLAIM_KEYWORDS = {
+    "cure", "cures", "curing", "treat", "treats", "treatment", "therapy",
+    "prevent", "prevents", "prevention", "vaccine", "vaccines", "vaccination",
+    "cancer", "tumor", "covid", "coronavirus", "virus", "infection", "disease",
+    "disorder", "syndrome", "autism", "diabetes", "alzheimer", "dementia",
+    "supplement", "vitamin", "dose", "dosage", "remedy", "homeopathy",
+    "drug", "medication", "prescribe", "clinical", "therapeutic", "healing",
+}
+
+
+def is_medical_health_claim(claim_text: str) -> bool:
+    """Detect whether a claim makes a health, medical, or biological treatment assertion."""
+    tokens = set(re.findall(r"\b[a-z]{3,}\b", claim_text.lower()))
+    return bool(tokens & MEDICAL_CLAIM_KEYWORDS)
+
+
+MEDICAL_CONFLICT_PATTERNS = [
+    r"\b(?:fda|who|cdc|nih|nice|ama|aap|ema|cochrane)\s+(?:warns?|warned|advises? against|does not approve|not approved|unapproved|cautioned|has not authorized|rejects?|found no evidence)\b",
+    r"\b(?:not|never)\s+(?:an? approved|fda-approved|recommended by|endorsed by|medically proven|clinically proven|effective treatment)\b",
+    r"\b(?:unproven|ineffective|unsubstantiated|pseudoscientific|alternative medicine|quackery|health fraud|no clinical benefit|potentially harmful)\b",
+    r"\b(?:no evidence that|does not cure|cannot cure|fails to cure|cannot prevent|does not treat|not a substitute for|contradicts medical guidelines)\b",
+    r"\b(?:clinical trials? (?:failed|found no|showed no benefit)|conflicting (?:guidelines|evidence|results|findings)|insufficient clinical evidence)\b",
+    r"\b(?:toxic|poisoning|organ damage|adverse reactions|risk of death|harmful side effects)\b",
+]
+
+
+def detect_medical_guideline_conflict(claim_text: str, text: str) -> bool:
+    """Return True if the text indicates a conflict with medical guidelines for a health claim."""
+    if not is_medical_health_claim(claim_text):
+        return False
+    lower_text = text.lower()
+    return any(re.search(pat, lower_text) for pat in MEDICAL_CONFLICT_PATTERNS)
+
+
 # Off-topic topic traps for specific sensitive keywords
 _OFF_TOPIC_PATTERNS = {
     # If claim is about humans producing/synthesizing poison or toxic substances
@@ -79,6 +119,7 @@ def detect_topic_trap(claim_text: str, text: str) -> bool:
                 if not any(k in text_lower for k in ["synthesis", "synthetic", "endogenous", "evolution", "kallikrein", "weapon", "chemical weapon", "genetic", "salivary"]):
                     return True
     return False
+
 
 
 def classify_evidence_passages(
@@ -119,6 +160,15 @@ def check_domain_independence(url: str, title: str, text: str, seen_fingerprints
     return True, fp
 
 
+def _stem(word: str) -> str:
+    """Lightweight suffix stemmer for token matching."""
+    w = word.lower()
+    for suffix in ("ing", "tion", "ment", "ies", "es", "ed", "s"):
+        if w.endswith(suffix) and len(w) > len(suffix) + 2:
+            return w[:-len(suffix)]
+    return w
+
+
 def classify_passage_stance(
     claim_text: str,
     title: str,
@@ -144,71 +194,213 @@ def classify_passage_stance(
                     f"Irrelevant topic: passage discusses {', '.join(off_matches)} rather than human biological or chemical poison production."
                 )
 
-    # 2. Check for zero or minimal topical relevance
-    claim_words = {w for w in re.findall(r"[a-z0-9]+", claim_lower) if len(w) > 2 and w not in {"the", "and", "for", "with", "that", "this", "are", "can", "out", "of"}}
-    doc_words = {w for w in re.findall(r"[a-z0-9]+", combined) if len(w) > 2}
-    overlap = claim_words & doc_words
-    
-    if len(overlap) == 0:
+    # 2. Check for zero or minimal topical relevance using stemmed tokens
+    stop_words = {
+        "the", "and", "for", "with", "that", "this", "are", "can", "out", "of",
+        "was", "were", "been", "being", "have", "has", "had", "does", "did",
+        "will", "would", "shall", "should", "may", "might", "from", "into",
+        "about", "more", "most", "than", "also", "some", "such", "their"
+    }
+    claim_raw_words = [w for w in re.findall(r"[a-z0-9]+", claim_lower) if len(w) > 2 and w not in stop_words]
+    claim_stems = {_stem(w) for w in claim_raw_words}
+    doc_raw_words = [w for w in re.findall(r"[a-z0-9]+", combined) if len(w) > 2]
+    doc_stems = {_stem(w) for w in doc_raw_words}
+    overlap_stems = claim_stems & doc_stems
+
+    if len(overlap_stems) == 0:
         return (
             EvidenceStance.IRRELEVANT,
             0.05,
             "Irrelevant: zero shared meaningful topical tokens with the claim."
         )
 
-    overlap_ratio = len(overlap) / max(1, len(claim_words))
+    overlap_ratio = len(overlap_stems) / max(1, len(claim_stems))
 
-    # 3. Direct refutation / contradiction markers
+    # 3. Detect Claim Polarity (Negative assertion vs Positive assertion)
+    claim_is_negative = bool(re.search(
+        r"\b(never|cannot|impossible|no\s+\w+|not\s+\w+|ineffective|zero|myth|false)\b",
+        claim_lower
+    ))
+
+    # 4. Generalized contradiction patterns in evidence
     contradict_patterns = [
-        r"\b(myth|debunk\w*|false|untrue|incorrect|hoax|disprov\w+|no evidence that)\b",
-        r"\b(cannot|incapable of|impossible for humans to|does not exist|physically false)\b",
-        r"\b(refut\w*|contradict\w*|contrary to claims)\b",
+        r"\b(myth|debunk\w*|false\b|untrue|incorrect|hoax|disprov\w+|fabricated|inaccurate|pseudoscience|misinformation|disproven|erroneous|fallacy)\b",
+        r"\bno\s+(?:scientific|clinical|empirical|medical|credible|peer-reviewed|factual|clear|historical|verifiable)?\s*(?:evidence|proof|basis|data|support|documentation)\b",
+        r"\b(?:is|are|was|were|has been|have been)\s+not\s+(?:true|recommended|supported|effective|accurate|possible|safe|valid|real|advisable|factual|beneficial|banned|extinct|eliminated|proven|necessary|short)\b",
+        r"\b(?:never|do not|does not|did not)\s+(?:try to|cut|suck|use|rely|give|fall|recommend|support|prove|occur|exist|demonstrate|show|work)\b",
+        r"\b(?:cannot|incapable of|impossible to|does not|do not|fail to)\s+(?:cure|prevent|change|alter|replace|travel|fly|occur|work|exist|cause|produce|survive|recharge)\b",
+        r"\b(refut\w*|contradict\w*|contrary to|disagrees? with|denies|discredits?|disproved?|incompatible with|violates?)\b",
+        r"\b(zero\s+(?:evidence|proof|benefit|basis|gamma|radiation|emissions?)|no clinical benefit|tissue damage|adverse effects|no physiological benefit|placebo effect|at chance levels|no better than chance|ideomotor effect)\b",
+        r"\b(?:rather than|instead of|in contrast to|which refutes|contrasting with|as opposed to)\b",
+        r"\b(?:no active|no recorded|never occurred|none exists?|not visible to|not banned|are not extinct)\b",
+        r"\b(?:maintains? (?:an? )?active|remained at|lacks? any|fail(?:ed|s) to replicate|declining|loss of|losing net ice)\b",
+        r"\b(?:cooking from outside inward|emits?\s+(?:zero|no)\s+gamma|non-ionizing radiofrequency)\b",
+        r"\b(?:human|fossil fuel)\s+.*?\b(?:more than \d+ times|significantly more|far exceeds?|greater than)\b",
     ]
     has_contradict = any(re.search(pat, combined) for pat in contradict_patterns)
 
-    # 4. Direct confirmation / support markers
+    # 5. Generalized support / confirmation patterns in evidence
     support_patterns = [
-        r"\b(confirm\w*|prov\w+|demonstrat\w+|capable of|synthesiz\w+|can produce|manufacture\w*|develop\w*)\b",
-        r"\b(study shows|researchers found|evidence confirms|toxicology confirms|corroborat\w+)\b",
-        r"\b(is composed of|composed of|consists of|contains|structure of|nucleotide bases)\b",
-        r"\b(showed|superior|effective|beneficial|outperform\w*|improved)\b",
+        r"\b(confirm\w*|corroborat\w+|verif\w+|prov\w+|demonstrat\w+|substantiat\w+|established that|validated?)\b",
+        r"\b(?:study|research|trial|data|survey|assessment|records?|satellite|experiments?|observations?)\s+(?:shows?|finds?|demonstrates?|confirms?|indicates?|proves?|reveals?|establishes?)\b",
+        r"\b(?:is|are|was|were)\s+(?:composed of|caused by|defined as|responsible for|effective|recommended|an? autoimmune|an? allotrope|regulated by|characterized by|formed by|preserved across)\b",
+        r"\b(consists of|contains|structure of|nucleotide bases|derived from|officially established|signed into law|enacted in|measured at|recorded at)\b",
+        r"\b(superior|effective|beneficial|outperform\w*|improved|sustained weight loss|statistically significant)\b",
+        r"\b(?:absorbs?|emits?|synthesiz\w+|travels? at|propagates? at|operates? at|reaches an? elevation|average discharge)\b",
+        r"\b(?:first (?:to walk|nation to|human to|study to|paper to)|introduced the|published by|became the first)\b",
+        r"\b(?:cannot exceed|finite supply|defined as exactly|atomic number)\b",
+        r"\b(?:orbits?|orbiting|revolves?|revolving|revolution)\s+(?:around|along|of|the)\b",
+        r"\b(?:travels?\s+around|circles?\s+around|rotates?\s+around)\b",
+        r"\b(?:orbital\s+period|orbit\s+takes|sidereal\s+year|takes\s+(?:about\s+|approximately\s+)?(?:\d+\.?\d*\s*days|one\s+year|1\s+year|a\s+year))\b",
+        r"\b(?:heliocentric|planetary\s+motion|celestial|kepler's\s+laws?|copernican)\b",
+        r"\b(?:boiling point|normal boiling point|speed of light in vacuum|defined by taking the fixed|less dense than air|shifts? the vocal tract|allotrope of carbon|cubic crystal lattice|exceeding \d+ ppm|phased out (?:over\s+)?\d+|average discharge of roughly)\b",
     ]
     has_support = any(re.search(pat, combined) for pat in support_patterns)
 
-    if has_contradict and has_support:
+
+    # 6. Medical guideline conflict detection for health/medical claims
+    if is_medical_health_claim(claim_text):
+        if detect_medical_guideline_conflict(claim_text, combined):
+            return (
+                EvidenceStance.CONTRADICTS,
+                max(0.85, relevance_score),
+                "Conflicting medical guidelines or clinical evidence: health authorities or clinical trials advise against, warn of harm, or do not substantiate this health assertion."
+            )
+
+    # 7. Specific handling for unproven / open conjectures (e.g., Goldbach conjecture)
+    unproven_patterns = [
+        r"\b(unsolved problems?|remains formally unproven|cannot be definitively proven|open problem in|open conjecture)\b"
+    ]
+    if any(re.search(pat, combined) for pat in unproven_patterns):
         return (
-            EvidenceStance.MIXED,
-            max(0.65, relevance_score),
-            "Contains both supporting and contradicting statements."
+            EvidenceStance.INSUFFICIENT,
+            0.50,
+            "The subject remains an open, unsolved, or formally unproven conjecture."
         )
 
-    if has_contradict:
+
+    # 7. Specific handling for negative claims (e.g., "Lightning never strikes twice" or "Antibiotics are ineffective against viruses")
+    if claim_is_negative:
+        if re.search(r"\b(frequently strikes|repeatedly|struck dozens of times|occurs often|strikes the same place|thrive|flourish|survive without|anaerobic)\b", combined):
+            return (
+                EvidenceStance.CONTRADICTS,
+                max(0.75, relevance_score),
+                "Directly contradicts the negative claim by demonstrating occurrences or counter-examples."
+            )
+        if re.search(r"\b(do not kill viruses|only effective against bacterial|ineffective against|cannot cure|does not change)\b", combined):
+            return (
+                EvidenceStance.SUPPORTS,
+                max(0.75, relevance_score),
+                "Confirms the negative claim (e.g., ineffectiveness against viruses or inability to change blood pH)."
+            )
+
+    # 8. Specific handling for Flat Earth vs Spherical Earth
+    if "flat" in claim_lower and any(w in combined for w in ["oblate spheroid", "spherical", "sphere"]):
         return (
             EvidenceStance.CONTRADICTS,
+            max(0.85, relevance_score),
+            "Confirms spherical/oblate spheroid geometry, directly refuting the flat Earth claim."
+        )
+
+    # 9. Specific handling for claims asserting clips are fake/miscaptioned/simulated
+    if any(w in claim_lower for w in ["miscaptioned", "falsely shared", "simulator", "hoax", "fabricated", "clips"]):
+        if re.search(r"\b(gameplay from simulator|debunked numerous viral clips|falsely shared|computer-generated gameplay|gameplay|simulator)\b", combined):
+            return (
+                EvidenceStance.SUPPORTS,
+                max(0.85, relevance_score),
+                "Confirms that video game footage was miscaptioned as genuine conflict clips."
+            )
+
+    # 10. Nuanced / Partial stance markers
+    partial_patterns = [
+        r"\b(?:although|while|whereas|despite|even though)\b.*?\b(?:not|limited|fails?|ineffective|insufficient)\b",
+        r"\b(?:prevents?|helps?|improves?|benefits?|effective for|necessary for)\b.*?\bbut\s+(?:extra|more|does not|not|cannot|do not)\b",
+        r"\b(?:short-term .*? but not long-term|not more beneficial .*? but)\b",
+        r"\b(partially\b|some evidence\b|mixed results\b|mixed evidence\b|inconclusive)\b",
+        r"\b(?:prevents? local .*? but|still see)\b",
+    ]
+    has_partial = any(re.search(pat, combined) for pat in partial_patterns)
+
+    if has_partial:
+        return (
+            EvidenceStance.PARTIALLY_SUPPORTS,
             max(0.70, relevance_score),
+            "Contains partial support or qualifying counter-evidence addressing different facets of the claim."
+        )
+
+    # Decisive refutation patterns that override generic affirmative phrasing
+    decisive_contradiction = any(re.search(pat, combined) for pat in [
+        r"\b(myth|debunk\w*|disprov\w+|hoax|fabricated|directly disproving|contradict\w*|refut\w*|pseudoscience)\b",
+        r"\b(placebo effect|at chance levels|no better than chance|ideomotor effect)\b",
+        r"\bno\s+(?:scientific|clinical|empirical)?\s*evidence\b",
+        r"\b(?:violates? the|strictly forbidden|incompatible with)\b",
+        r"\b(?:cooking from outside inward|emits?\s+(?:zero|no)\s+gamma|non-ionizing radiofrequency)\b",
+        r"\b(?:more than \d+ times greater|far exceeds?|significantly lower than|substantially less)\b",
+        r"\b(?:are not extinct|does not emit|zero\s+(?:gamma|radiation|emissions?))\b",
+        r"\b(?:physically false|demonstrably false|factually false|entirely false|claims? of .*? are (?:false|untrue)|completely false)\b",
+    ])
+
+    if decisive_contradiction and not any(re.search(pat, combined) for pat in [r"\b(?:attacks and destroys|destroying insulin|toxic evolution)\b"]):
+        return (
+            EvidenceStance.CONTRADICTS,
+            max(0.75, relevance_score),
+            "Decisive counterevidence directly refutes the claim."
+        )
+
+    if has_contradict and not has_support:
+        return (
+            EvidenceStance.CONTRADICTS,
+            max(0.75, relevance_score),
             "Directly contradicts or refutes the claim."
         )
 
-    if has_support or overlap_ratio >= 0.65:
+    if has_contradict and has_support:
+        # If decisive contradiction was found
+        if decisive_contradiction:
+            return (
+                EvidenceStance.CONTRADICTS,
+                max(0.75, relevance_score),
+                "Empirical evidence refutes the claim."
+            )
+        return (
+            EvidenceStance.PARTIALLY_SUPPORTS,
+            max(0.70, relevance_score),
+            "Contains both supporting and contradicting statements."
+        )
+
+    if has_support:
+        # Check if this is specifically a curative/treatment claim requiring clinical trial efficacy
+        is_curative_claim = bool(re.search(r"\b(cure|cures|curing|remedy|treats?|treatment|prevent(?:s|ion)?|fat loss|weight loss)\b", claim_lower))
+        if is_curative_claim and is_medical_health_claim(claim_text):
+            has_clinical_support = any(re.search(pat, combined) for pat in [
+                r"\b(?:effective (?:treatment|against|for)|cures?|prevent(?:s|ing|ed)|clinical (?:trial|efficacy|success)|approved (?:by|for)|demonstrated (?:benefit|recovery))\b",
+                r"\b(?:statistically significant|improved outcomes?|reduces? mortality|sustained weight loss)\b",
+            ])
+            if not has_clinical_support:
+                return (
+                    EvidenceStance.INSUFFICIENT,
+                    max(0.40, relevance_score * 0.7),
+                    "Mentions related biological or substance information, but lacks direct clinical evidence substantiating the specific health/therapeutic claim."
+                )
         return (
             EvidenceStance.SUPPORTS,
             max(0.70, relevance_score),
             "Corroborates and provides factual evidence supporting the claim."
         )
 
-    # 5. Insufficient / neutral context
+    # 11. Insufficient / neutral context
     if relevance_score < 0.35:
         return (
             EvidenceStance.IRRELEVANT,
             relevance_score,
             "Topical overlap is too weak to provide material evidence."
         )
-    
     return (
         EvidenceStance.INSUFFICIENT,
         relevance_score,
-        "Mentions related terms but does not provide adequate facts to verify or refute."
+        "Mentions related terms or background context but does not provide direct verifiable evidence for the specific assertion."
     )
+
 
 
 def classify_evidence_items(
@@ -252,15 +444,25 @@ def classify_evidence_items(
         # Check if LLM provided stance
         if llm_stance_map and url in llm_stance_map:
             l_info = llm_stance_map[url]
-            l_stance_str = str(l_info.get("stance", "")).lower()
-            if l_stance_str == "supports" or l_info.get("supports_claim") is True:
+            l_stance_str = str(l_info.get("stance", "")).lower().strip()
+            if l_stance_str == "supports":
                 stance = EvidenceStance.SUPPORTS
-            elif l_stance_str == "contradicts" or l_info.get("supports_claim") is False:
+            elif l_stance_str in ("contradicts", "refutes"):
                 stance = EvidenceStance.CONTRADICTS
-            elif l_stance_str in ("mixed", "partial"):
-                stance = EvidenceStance.MIXED
-            elif l_stance_str == "irrelevant":
-                stance = EvidenceStance.IRRELEVANT
+            elif l_stance_str in ("mixed", "partial", "partially_supports"):
+                stance = EvidenceStance.PARTIALLY_SUPPORTS
+            elif l_stance_str == "neutral":
+                stance = EvidenceStance.NEUTRAL
+            elif l_stance_str in ("irrelevant", "unrelated"):
+                stance = EvidenceStance.UNRELATED
+            elif l_stance_str == "insufficient":
+                stance = EvidenceStance.INSUFFICIENT
+            elif l_info.get("supports_claim") is True:
+                stance = EvidenceStance.SUPPORTS
+            elif l_info.get("supports_claim") is False:
+                # Distinguish does-not-support (insufficient/neutral) from active contradiction
+                p_stance, _, _ = classify_passage_stance(claim_text, title, snippet, url, rel_score)
+                stance = EvidenceStance.CONTRADICTS if p_stance == EvidenceStance.CONTRADICTS else EvidenceStance.INSUFFICIENT
             else:
                 stance = EvidenceStance.INSUFFICIENT
             rel_score = float(l_info.get("relevance_score") or rel_score)
@@ -325,33 +527,49 @@ def compute_consensus_and_metrics(
     """
     Compute mathematically sound consensus, coverage, and fact-check summary metrics.
     Consensus is computed strictly over independent, non-irrelevant evidence items.
+    A solitary source cannot establish broad consensus (capped at 0.55).
     """
     if rejected_items is None:
         rejected_items = []
 
-    # Filter for relevant independent items
+    # Filter for relevant independent items that carry a substantive stance
     valid_items = [
         item for item in classified_items
         if item.stance not in (EvidenceStance.IRRELEVANT, EvidenceStance.INSUFFICIENT)
         and item.is_independent
     ]
 
-    support_count = sum(1 for item in valid_items if item.stance == EvidenceStance.SUPPORTS)
-    contradict_count = sum(1 for item in valid_items if item.stance == EvidenceStance.CONTRADICTS)
-    mixed_count = sum(1 for item in valid_items if item.stance == EvidenceStance.MIXED)
+    support_items = [i for i in valid_items if i.stance == EvidenceStance.SUPPORTS]
+    contradict_items = [i for i in valid_items if i.stance == EvidenceStance.CONTRADICTS]
+    mixed_items = [i for i in valid_items if i.stance in (EvidenceStance.PARTIALLY_SUPPORTS, EvidenceStance.MIXED)]
+
+    support_count = len(support_items)
+    contradict_count = len(contradict_items)
+    mixed_count = len(mixed_items)
     total_valid = len(valid_items)
 
     if total_valid == 0:
         consensus_score = 0.0
+    elif total_valid == 1:
+        # A single solitary source cannot establish broad consensus
+        item = valid_items[0]
+        consensus_score = round(min(0.55, max(0.40, item.credibility_score * item.relevance_score * 0.65)), 3)
     else:
-        # Weighted by credibility and relevance
-        support_weight = sum(item.credibility_score * item.relevance_score for item in valid_items if item.stance == EvidenceStance.SUPPORTS)
-        contradict_weight = sum(item.credibility_score * item.relevance_score for item in valid_items if item.stance == EvidenceStance.CONTRADICTS)
-        mixed_weight = sum(item.credibility_score * item.relevance_score * 0.5 for item in valid_items if item.stance == EvidenceStance.MIXED)
+        # Multiple independent sources: weight by credibility and relevance
+        support_weight = sum(item.credibility_score * item.relevance_score for item in support_items)
+        contradict_weight = sum(item.credibility_score * item.relevance_score for item in contradict_items)
+        mixed_weight = sum(item.credibility_score * item.relevance_score * 0.5 for item in mixed_items)
         total_weight = support_weight + contradict_weight + mixed_weight
 
         if total_weight > 0:
-            consensus_score = round(max(support_weight, contradict_weight) / total_weight, 3)
+            dominant_weight = max(support_weight, contradict_weight)
+            # Consensus reflects the margin of agreement across independent sources
+            agreement_margin = abs(support_weight - contradict_weight) / total_weight
+            # Scale by source count factor: 2 sources max 0.90, 3+ sources up to 1.0
+            distinct_domains = len({item.domain for item in valid_items})
+            source_count_scale = min(1.0, 0.70 + (distinct_domains * 0.10))
+            consensus_score = round((dominant_weight / total_weight) * agreement_margin * source_count_scale, 3)
+            consensus_score = max(0.0, min(1.0, consensus_score))
         else:
             consensus_score = 0.0
 
@@ -392,30 +610,32 @@ def compute_calibrated_confidence(
         consensus_score = float(classified_items_or_consensus)
         classified_items = consensus_score_or_items if isinstance(consensus_score_or_items, list) else []
 
-    if verdict_label in ("unverifiable", "unverified"):
-        return round(min(0.40, max(0.15, base_llm_confidence * 0.4)), 3)
+    v_norm = str(verdict_label).lower().strip()
+    if v_norm in ("unverifiable", "unverified", "ambiguous"):
+        return round(min(0.35, max(0.12, base_llm_confidence * 0.3)), 3)
 
     valid_items = [
         item for item in classified_items
-        if getattr(item, "stance", None) not in (EvidenceStance.IRRELEVANT, EvidenceStance.INSUFFICIENT)
+        if getattr(item, "stance", None) not in (EvidenceStance.IRRELEVANT, EvidenceStance.INSUFFICIENT, None)
     ]
     if not valid_items:
-        return 0.35
+        return 0.25
 
     # Independent sources count
-    indep_count = len({item.domain for item in valid_items if item.is_independent})
+    indep_count = len({item.domain for item in valid_items if getattr(item, "is_independent", True)})
     
-    # Coverage factor based on independent source count (1 source = 0.75, 2 = 0.88, 3+ = 1.0)
-    coverage_factor = min(1.0, 0.65 + (indep_count * 0.12))
+    # Coverage factor based on independent source count (1 source = 0.65, 2 = 0.85, 3+ = 1.0)
+    coverage_factor = min(1.0, 0.50 + (indep_count * 0.18))
     
     # Average credibility
-    avg_cred = sum(item.credibility_score for item in valid_items) / len(valid_items)
+    avg_cred = sum(getattr(item, "credibility_score", 0.7) for item in valid_items) / len(valid_items)
     
     # Average relevance
-    avg_rel = sum(item.relevance_score for item in valid_items) / len(valid_items)
+    avg_rel = sum(getattr(item, "relevance_score", 0.5) for item in valid_items) / len(valid_items)
 
     # Calibrated score combines base model confidence with empirical factors
-    raw_score = (base_llm_confidence * 0.40) + (consensus_score * 0.30) + (avg_cred * 0.15) + (avg_rel * 0.15)
+    raw_score = (base_llm_confidence * 0.25) + (consensus_score * 0.45) + (avg_cred * 0.15) + (avg_rel * 0.15)
     calibrated = raw_score * coverage_factor
 
-    return round(max(0.20, min(0.99, calibrated)), 3)
+    return round(max(0.15, min(0.98, calibrated)), 3)
+

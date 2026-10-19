@@ -1,0 +1,127 @@
+{
+  "total_cases": 100,
+  "accuracy": 0.94,
+  "correct_count": 94,
+  "elapsed_seconds": 62519.37,
+  "ece": 0.1297,
+  "brier_score": 0.1308,
+  "confusion_matrix": {
+    "false": {
+      "false": 41,
+      "unverified": 1
+    },
+    "true": {
+      "true": 37,
+      "unverified": 2
+    },
+    "misleading": {
+      "false": 3
+    },
+    "unverified": {
+      "unverified": 16
+    }
+  },
+  "category_metrics": {
+    "health_medicine": {
+      "accuracy": 0.8333,
+      "correct": 10,
+      "total": 12
+    },
+    "everyday_physics": {
+      "accuracy": 1.0,
+      "correct": 11,
+      "total": 11
+    },
+    "climate_environment": {
+      "accuracy": 1.0,
+      "correct": 11,
+      "total": 11
+    },
+    "history_geography": {
+      "accuracy": 0.9091,
+      "correct": 10,
+      "total": 11
+    },
+    "technology_ai": {
+      "accuracy": 0.9091,
+      "correct": 10,
+      "total": 11
+    },
+    "geopolitics_conflict": {
+      "accuracy": 1.0,
+      "correct": 11,
+      "total": 11
+    },
+    "pseudoscience_conspiracy": {
+      "accuracy": 1.0,
+      "correct": 11,
+      "total": 11
+    },
+    "economics_finance": {
+      "accuracy": 0.8182,
+      "correct": 9,
+      "total": 11
+    },
+    "adversarial_logic": {
+      "accuracy": 1.0,
+      "correct": 11,
+      "total": 11
+    }
+  },
+  "failures": [
+    {
+      "id": "eval-006",
+      "claim": "Intermittent fasting produces significantly greater long-term fat loss than continuous calorie restriction in clinical trials.",
+      "category": "health_medicine",
+      "ground_truth": "misleading",
+      "predicted": "false",
+      "confidence": 0.95,
+      "reasoning": "A NEJM clinical trial found that time-restricted eating was not more effective than daily calorie restriction for reduci"
+    },
+    {
+      "id": "eval-007",
+      "claim": "Eating carrots directly improves night vision and allows humans to see in pitch darkness.",
+      "category": "health_medicine",
+      "ground_truth": "misleading",
+      "predicted": "false",
+      "confidence": 0.96,
+      "reasoning": "The Scientific American article explains that while beta\u2011carotene (from carrots) is essential to prevent vitamin\u202fA defic"
+    },
+    {
+      "id": "eval-045",
+      "claim": "Australia was the first sovereign nation to grant all women the right to run for national parliament in 1902.",
+      "category": "history_geography",
+      "ground_truth": "true",
+      "predicted": "unverified",
+      "confidence": 0.73,
+      "reasoning": "The source confirms that the Commonwealth Franchise Act 1902 gave Australian women the right to stand for federal Parlia"
+    },
+    {
+      "id": "eval-056",
+      "claim": "Turning on incognito mode prevents internet service providers and network administrators from tracking visited websites.",
+      "category": "technology_ai",
+      "ground_truth": "misleading",
+      "predicted": "false",
+      "confidence": 0.96,
+      "reasoning": "The EFF source explains that private/incognito browsing only stops the local device from storing browsing history; it do"
+    },
+    {
+      "id": "eval-082",
+      "claim": "The US dollar has been backed by an equivalent weight in physical gold at the Federal Reserve since 1971.",
+      "category": "economics_finance",
+      "ground_truth": "false",
+      "predicted": "unverified",
+      "confidence": 0.2,
+      "reasoning": "The Cato Institute\u2019s historical hyperinflation data states that the peak monthly inflation in Weimar Germany was approxi"
+    },
+    {
+      "id": "eval-083",
+      "claim": "The Gross Domestic Product (GDP) measures the monetary market value of all final goods and services produced in a country.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "unverified",
+      "confidence": 0.2,
+      "reasoning": "The Cato Institute\u2019s historical hyperinflation data states that the peak monthly inflation in Weimar Germany was approxi"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 from schemas.claim import Claim, SourcePlatform
 from schemas.verdict import Verdict, VerdictLabel, Evidence
@@ -18,7 +18,7 @@ MOCK_CLAIM_1 = Claim(
     language="en",
     timestamp_in_video=15.5,
     embedding_id="emb_001",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_CLAIM_2 = Claim(
@@ -30,7 +30,7 @@ MOCK_CLAIM_2 = Claim(
     language="es",
     timestamp_in_video=42.0,
     embedding_id="emb_002",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_CLAIM_3 = Claim(
@@ -42,7 +42,7 @@ MOCK_CLAIM_3 = Claim(
     language="en",
     timestamp_in_video=5.0,
     embedding_id="emb_003",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_CLAIM_4 = Claim(
@@ -54,7 +54,7 @@ MOCK_CLAIM_4 = Claim(
     language="en",
     timestamp_in_video=120.0,
     embedding_id="emb_004",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_CLAIM_5 = Claim(
@@ -66,7 +66,7 @@ MOCK_CLAIM_5 = Claim(
     language="fr",
     timestamp_in_video=88.2,
     embedding_id="emb_005",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 
@@ -86,7 +86,7 @@ MOCK_VERDICT_1 = Verdict(
         )
     ],
     reasoning="Atmospheric science clearly explains sky color, and claims of government space lasers affecting it are baseless conspiracies.",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_VERDICT_2 = Verdict(
@@ -103,7 +103,7 @@ MOCK_VERDICT_2 = Verdict(
         )
     ],
     reasoning="While lemon water is healthy, it is an exaggeration and misleading to claim it cures all diseases.",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_VERDICT_3 = Verdict(
@@ -120,7 +120,7 @@ MOCK_VERDICT_3 = Verdict(
         )
     ],
     reasoning="This aligns with general, widely-accepted medical advice regarding daily hydration needs.",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_VERDICT_4 = Verdict(
@@ -137,7 +137,7 @@ MOCK_VERDICT_4 = Verdict(
         )
     ],
     reasoning="The original study was vastly misrepresented; it showed marginal health benefits, not immortality.",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_VERDICT_5 = Verdict(
@@ -147,7 +147,7 @@ MOCK_VERDICT_5 = Verdict(
     confidence=0.85,
     evidence=[],
     reasoning="There is no historical or scientific evidence to either prove or absolutely disprove the existence of hidden objects deeply buried beneath the pyramids without exhaustive, invasive excavation, though it is highly improbable.",
-    created_at=datetime.utcnow()
+    created_at=datetime.now(timezone.utc)
 )
 
 MOCK_CLAIMS = [MOCK_CLAIM_1, MOCK_CLAIM_2, MOCK_CLAIM_3, MOCK_CLAIM_4, MOCK_CLAIM_5]

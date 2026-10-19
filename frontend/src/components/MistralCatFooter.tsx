@@ -31,12 +31,8 @@ export default function MistralCatFooter() {
       <div className="mistral-nav-wrap">
 
 
-        {/* ── Sub-bar: Copyright and Day/Night Pill Switch (Matches Mistral Screenshot) ── */}
+        {/* ── Sub-bar: Day/Night Pill Switch (Matches Mistral Screenshot) ── */}
         <div className="mistral-sub-bar">
-          <div className="copyright-tag">
-            TruthLens AI © 2026
-          </div>
-
           <div className="footer-theme-pill">
             <button
               className={`theme-icon-btn ${theme === 'day' ? 'active' : ''}`}
@@ -61,41 +57,32 @@ export default function MistralCatFooter() {
       <style jsx>{`
         .mistral-footer-root {
           width: 100%;
-          background: rgba(15, 23, 42, 0.85);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
+          background: transparent;
           color: var(--text-primary);
           position: relative;
-          border-top: 1px solid var(--border);
+          border-top: none;
           font-family: 'Inter', sans-serif;
-          margin-top: 2.5rem;
-          padding-bottom: 70px; /* Space for the walking cat meadow at the bottom */
+          margin-top: 0.5rem;
+          padding-bottom: 64px; /* Space for the walking cat meadow at the bottom */
           z-index: 2;
-          transition: background 0.3s ease;
         }
 
         :global([data-theme='light']) .mistral-footer-root {
-          background: rgba(255, 255, 255, 0.90);
+          background: transparent;
         }
 
         .mistral-nav-wrap {
-          max-width: 1200px;
+          max-width: 1160px;
           margin: 0 auto;
-          padding: 1.25rem 2rem;
+          padding: 0.5rem 1.5rem;
         }
 
         .mistral-sub-bar {
           display: flex;
           align-items: center;
-          justify-content: space-between;
+          justify-content: flex-end;
           flex-wrap: wrap;
           gap: 1.25rem;
-        }
-
-        .copyright-tag {
-          font-size: 0.80rem;
-          color: var(--text-muted);
-          font-weight: 500;
         }
 
         .footer-theme-pill {

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getYouTubeId, detectPlatform, ClaimWithVerdict, VerdictLabel, DomainTrust } from '../lib/mockData';
 import MistralCatFooter from '../components/MistralCatFooter';
-import PixelWorldBackground from '../components/PixelWorldBackground';
+import PixelWorldBackground, { PixelAnimationControls } from '../components/PixelWorldBackground';
 import { ExportDossierModal } from '../components/ExportDossierModal';
 import { SystemHealthModal } from '../components/SystemHealthModal';
 
@@ -30,11 +30,11 @@ const STAGE_ICONS: Record<string, string> = {
   verifying: '⊘', done: '✓',
 };
 
-const VERDICT_ICON: Record<VerdictLabel, string> = {
-  true: '✓', false: '✗', misleading: '⚠', unverifiable: '?'
+const VERDICT_ICON: Record<string, string> = {
+  true: '✓', false: '✗', misleading: '⚠', unverifiable: '⚠'
 };
-const VERDICT_COLOR: Record<VerdictLabel, string> = {
-  true: '#10b981', false: '#f43f5e', misleading: '#f59e0b', unverifiable: '#64748b'
+const VERDICT_COLOR: Record<string, string> = {
+  true: '#10b981', false: '#f43f5e', misleading: '#f59e0b', unverifiable: '#f59e0b'
 };
 const TRUST_LABEL: Record<DomainTrust, string> = {
   high: '✓ High Trust', medium: '~ Medium', low: '⚠ Low', blocked: '✗ Blocked'
@@ -52,12 +52,19 @@ const STAGE_MSG: Partial<Record<Stage, string>> = {
 
 // ─── Verdict Category Colours ────────────────────────────────────────────────────
 function getVerdictCatStyle(cat: string): { color: string; bg: string; border: string } {
-  const lc = cat.toLowerCase();
-  if (lc.includes('genuine')) return { color: '#059669', bg: 'rgba(5,150,105,0.07)', border: 'rgba(5,150,105,0.2)' };
-  if (lc.includes('deepfake')) return { color: '#7c3aed', bg: 'rgba(124,58,237,0.07)', border: 'rgba(124,58,237,0.2)' };
-  if (lc.includes('fake')) return { color: '#dc2626', bg: 'rgba(220,38,38,0.07)', border: 'rgba(220,38,38,0.2)' };
-  if (lc.includes('misleading')) return { color: '#d97706', bg: 'rgba(217,119,6,0.07)', border: 'rgba(217,119,6,0.2)' };
-  if (lc.includes('manipulated')) return { color: '#ea580c', bg: 'rgba(234,88,12,0.07)', border: 'rgba(234,88,12,0.2)' };
+  const lc = (cat || '').toLowerCase();
+  if (lc.includes('genuine') || lc.includes('authentic') || lc.includes('supported'))
+    return { color: '#059669', bg: 'rgba(5,150,105,0.07)', border: 'rgba(5,150,105,0.2)' };
+  if (lc.includes('deepfake') || lc.includes('synthetic'))
+    return { color: '#7c3aed', bg: 'rgba(124,58,237,0.07)', border: 'rgba(124,58,237,0.2)' };
+  if (lc.includes('fake') || lc.includes('misinformation') || lc.includes('deceptive') || lc.includes('debunked'))
+    return { color: '#dc2626', bg: 'rgba(220,38,38,0.07)', border: 'rgba(220,38,38,0.2)' };
+  if (lc.includes('misleading') || lc.includes('sensationalized') || lc.includes('mixed'))
+    return { color: '#d97706', bg: 'rgba(217,119,6,0.07)', border: 'rgba(217,119,6,0.2)' };
+  if (lc.includes('manipulated') || lc.includes('context'))
+    return { color: '#ea580c', bg: 'rgba(234,88,12,0.07)', border: 'rgba(234,88,12,0.2)' };
+  if (lc.includes('unsubstantiated') || lc.includes('inconclusive') || lc.includes('low corroboration') || lc.includes('unverified'))
+    return { color: '#0284c7', bg: 'rgba(2,132,199,0.07)', border: 'rgba(2,132,199,0.2)' };
   return { color: '#64748b', bg: 'rgba(100,116,139,0.07)', border: 'rgba(100,116,139,0.2)' };
 }
 
@@ -146,16 +153,10 @@ function OverallVerdictBanner({
               <div className="breakdown-label" style={{ color: '#dc2626' }}>False</div>
             </div>
           )}
-          {breakdown.misleading > 0 && (
+          {((breakdown.misleading || 0) + (breakdown.unverifiable || 0)) > 0 && (
             <div className="breakdown-pill" style={{ background: 'rgba(217,119,6,0.07)', border: '1px solid rgba(217,119,6,0.18)' }}>
-              <div className="breakdown-number" style={{ color: '#d97706' }}>{breakdown.misleading}</div>
+              <div className="breakdown-number" style={{ color: '#d97706' }}>{(breakdown.misleading || 0) + (breakdown.unverifiable || 0)}</div>
               <div className="breakdown-label" style={{ color: '#d97706' }}>Misleading</div>
-            </div>
-          )}
-          {breakdown.unverifiable > 0 && (
-            <div className="breakdown-pill" style={{ background: 'rgba(100,116,139,0.07)', border: '1px solid rgba(100,116,139,0.18)' }}>
-              <div className="breakdown-number" style={{ color: '#64748b' }}>{breakdown.unverifiable}</div>
-              <div className="breakdown-label" style={{ color: '#64748b' }}>Unverified</div>
             </div>
           )}
           <div className="breakdown-pill" style={{ background: 'rgba(79,70,229,0.06)', border: '1px solid rgba(79,70,229,0.15)' }}>
@@ -540,13 +541,13 @@ function DataMiningPanel({ report }: { report: any }) {
             }}>
               <div style={{ flex: 1 }}>
                 <p style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: getVerdictCatStyle(classification.category).color, marginBottom: '0.25rem' }}>
-                  DM Classification Result
+                  DM Narrative Classification
                 </p>
                 <p style={{ fontFamily: 'Outfit, sans-serif', fontSize: '1.3rem', fontWeight: 800, color: getVerdictCatStyle(classification.category).color }}>
                   {classification.category}
                 </p>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                  Suspicion score: {(classification.suspicion_score * 100).toFixed(0)}% · Confidence: {(classification.confidence * 100).toFixed(0)}%
+                  Suspicion score: {(classification.suspicion_score * 100).toFixed(0)}% · Pattern Confidence: {(classification.confidence * 100).toFixed(0)}%
                 </p>
               </div>
               <div style={{ textAlign: 'center' }}>
@@ -857,9 +858,60 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
       </div>
 
       {tab === 'verdict' && (
-        <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.7, borderLeft: '2px solid var(--border-active)', paddingLeft: '0.85rem' }}>
-          {verdict?.reasoning || 'No detailed reasoning available.'}
-        </p>
+        <div>
+          <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', lineHeight: 1.7, borderLeft: '2px solid var(--border-active)', paddingLeft: '0.85rem', marginBottom: '0.85rem' }}>
+            {verdict?.reasoning || 'No detailed reasoning available.'}
+          </p>
+
+          {/* Atomic Claim Decomposition */}
+          {verdict?.atomic_assessments && verdict.atomic_assessments.length > 0 && (
+            <div style={{ marginTop: '0.85rem', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.75rem 0.85rem' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent)', marginBottom: '0.55rem' }}>
+                Atomic Claim Assessments ({verdict.atomic_assessments.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+                {verdict.atomic_assessments.map((atom: any, aIdx: number) => {
+                  const aColor = VERDICT_COLOR[atom.verdict as VerdictLabel] || '#f59e0b';
+                  return (
+                    <div key={atom.id || aIdx} style={{ background: 'rgba(0,0,0,0.18)', borderRadius: '8px', padding: '0.6rem 0.75rem', borderLeft: `3px solid ${aColor}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{atom.atomic_claim}</span>
+                        <span className={`badge badge-${atom.verdict || 'misleading'}`} style={{ fontSize: '0.65rem' }}>
+                          {(atom.verdict || 'misleading').toUpperCase()}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>{atom.reasoning}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Unresolved Uncertainties */}
+          {verdict?.unresolved_uncertainties && verdict.unresolved_uncertainties.length > 0 && (
+            <div style={{ marginTop: '0.75rem', background: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '10px', padding: '0.65rem 0.85rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#f59e0b', marginBottom: '0.3rem' }}>
+                ⚠️ Missing Context & Unresolved Uncertainties
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                {verdict.unresolved_uncertainties.map((u: string, uIdx: number) => (
+                  <li key={uIdx}>{u}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Canonical Audit Hash */}
+          {verdict?.canonical_hash && (
+            <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              <span>Deterministic Verification Hash:</span>
+              <code style={{ background: 'rgba(255,255,255,0.06)', padding: '2px 6px', borderRadius: '4px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--accent)' }}>
+                {verdict.canonical_hash}
+              </code>
+            </div>
+          )}
+        </div>
       )}
 
       {tab === 'searches' && (
@@ -903,6 +955,26 @@ function ClaimCard({ item, index, onSeek }: { item: ClaimWithVerdict; index: num
                 </div>
                 <a href={ev.source_url} target="_blank" rel="noreferrer" className="ev-title">{ev.source_title} ↗</a>
                 <p className="ev-snippet">"{ev.snippet}"</p>
+                {ev.quote && (
+                  <div style={{ margin: '0.45rem 0', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.55rem 0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {ev.quote_verified ? '✓ Verified Verbatim Passage' : 'Extracted Source Passage'}
+                      </span>
+                      {ev.quote_location && (
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Location: {ev.quote_location}</span>
+                      )}
+                    </div>
+                    <blockquote style={{ margin: 0, fontSize: '0.8rem', fontStyle: 'italic', color: 'var(--text-primary)', lineHeight: 1.45 }}>
+                      "{ev.quote}"
+                    </blockquote>
+                  </div>
+                )}
+                {ev.credibility_limitation && (
+                  <div style={{ margin: '0.35rem 0', fontSize: '0.72rem', color: '#f59e0b', background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.15)', padding: '3px 8px', borderRadius: '6px' }}>
+                    ⚠️ Limitation: {ev.credibility_limitation}
+                  </div>
+                )}
                 <div className="ev-footer">
                   <span className="ev-stance-icon">
                     {(ev as any).stance === 'supports' || ev.supports_claim === true ? '🟢 Supports' :
@@ -979,13 +1051,29 @@ export default function Home() {
   // 10/10 Interactive Modals & Filtering States
   const [showExportModal, setShowExportModal] = useState(false);
   const [showHealthModal, setShowHealthModal] = useState(false);
-  const [claimFilter, setClaimFilter] = useState<'all' | 'true' | 'false' | 'misleading' | 'unverifiable'>('all');
+  const [claimFilter, setClaimFilter] = useState<'all' | 'true' | 'false' | 'misleading'>('all');
   const [claimSearch, setClaimSearch] = useState('');
   const [seekSec, setSeekSec] = useState<number | null>(null);
   const [activeDemoCase, setActiveDemoCase] = useState<string | null>(null);
+  const [idleTab, setIdleTab] = useState<'cases' | 'pipeline'>('cases');
 
   const stageIndex = PIPELINE_STAGES.indexOf(stage as any);
   const isProcessing = !['idle', 'done', 'no_claims_found', 'extraction_failed', 'failed'].includes(stage);
+
+  // Lock scrolling strictly on idle landing page
+  useEffect(() => {
+    if (stage === 'idle') {
+      document.documentElement.classList.add('idle-no-scroll');
+      document.body.classList.add('idle-no-scroll');
+    } else {
+      document.documentElement.classList.remove('idle-no-scroll');
+      document.body.classList.remove('idle-no-scroll');
+    }
+    return () => {
+      document.documentElement.classList.remove('idle-no-scroll');
+      document.body.classList.remove('idle-no-scroll');
+    };
+  }, [stage]);
 
   // ── Poll Job Status + incremental results ──
   useEffect(() => {
@@ -993,6 +1081,14 @@ export default function Home() {
     const poll = async () => {
       try {
         const res = await fetch(`/api/jobs/${jobId}`);
+        if (!res.ok) {
+          if (res.status === 404) {
+            setErrorMessage('Job session not found or server was restarted. Please re-submit your analysis.');
+            setStage('failed');
+            return true;
+          }
+          return false;
+        }
         const job = await res.json();
         setProgress(job.progress_percent ?? 0);
         const s = job.status as Stage;
@@ -1075,7 +1171,7 @@ export default function Home() {
     const interval = setInterval(async () => {
       const finished = await poll();
       if (finished) clearInterval(interval);
-    }, 1500);
+    }, 8000);
     return () => clearInterval(interval);
   }, [jobId, isProcessing]);
 
@@ -1083,8 +1179,20 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url.trim()) return;
-    setYtId(getYouTubeId(url)); setPlatform(detectPlatform(url));
+    const cleanUrl = url.trim();
+    if (!cleanUrl) return;
+
+    // Validate that input is specifically a YouTube Shorts URL
+    const isShorts = cleanUrl.includes('/shorts/') || cleanUrl.includes('shorts/');
+    const isLocalOrTest = cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1') || cleanUrl.includes('example.com') || cleanUrl.startsWith('/');
+    
+    if (!isShorts && !isLocalOrTest) {
+      setErrorMessage('Please enter only a YouTube Shorts URL (e.g., https://www.youtube.com/shorts/VIDEO_ID). TruthLens AI is designed specifically for short-form viral video verification.');
+      setStage('failed');
+      return;
+    }
+
+    setYtId(getYouTubeId(cleanUrl)); setPlatform(detectPlatform(cleanUrl));
     setTranscriptLines([]); setRealClaims([]); setJobId(null);
     setOverallVerdict(null); setVerdictBreakdown(null); setErrorMessage(null);
     setForensicsReport(null); setOsintReport(null); setDmReport(null);
@@ -1093,7 +1201,7 @@ export default function Home() {
     setActiveDemoCase(null); setSeekSec(null); setClaimFilter('all'); setClaimSearch('');
     setStage('extracting'); setProgress(5);
     try {
-      const res = await fetch('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ video_url: url }) });
+      const res = await fetch('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ video_url: cleanUrl }) });
       if (res.ok) { const job = await res.json(); setJobId(job.id); }
       else { setErrorMessage('Failed to submit job. Is the backend running?'); setStage('failed'); }
     } catch { setErrorMessage('Failed to connect to backend. Please check that the server is running.'); setStage('failed'); }
@@ -1164,79 +1272,82 @@ export default function Home() {
   return (
     <>
       <PixelWorldBackground />
-      <div className="page-wrap">
-      {/* ── Top Brand Bar ── */}
-      <div className="top-brand-bar">
-        <div className="top-brand-left">
-          <div className="brand-badge-pill">
-            <span className="brand-dot" />
-            <span className="brand-name">TruthLens AI</span>
-            <span className="brand-sep">•</span>
-            <span className="brand-tag">FORENSICS ENGINE v2.4</span>
-          </div>
-          <button
-            type="button"
-            className="system-health-pill"
-            onClick={() => setShowHealthModal(true)}
-            title="Inspect live system diagnostics & API circuit breakers"
-          >
-            <span className="live-status-dot" />
-            <span>System: Operational</span>
-            <span className="system-health-ping">[Diagnostics ↗]</span>
-          </button>
-        </div>
-      </div>
-
-      {/* ── Hero Section ── */}
-      <header className="site-header">
-        <div className="site-header-badge">
-          <span className="badge-sparkle">✦</span>
-          RESEARCH-GRADE FORENSICS • EXPLAINABLE AI • OSINT
-        </div>
-        <h1 className="hero-title">
-          Multimodal Video Forensics
-          <span className="gradient-highlight">
-            <span className="title-amp">&amp;</span> Fact-Checking Engine
-          </span>
-        </h1>
-        <p className="hero-subtitle">
-          Detect deepfakes, inspect voice &amp; video forensics, mine <span style={{ whiteSpace: 'nowrap' }}>cross-platform</span> OSINT signals,
-          and verify claims with explainable AI verdicts.
-        </p>
-        <div className="pipeline-stepper-ribbon">
-          {[
-            { icon: '↓', label: 'Ingest' },
-            { icon: '◉', label: 'Transcribe' },
-            { icon: '◈', label: 'Claims' },
-            { icon: '◇', label: 'Forensics' },
-            { icon: '▦', label: 'Data Mining' },
-            { icon: '⊘', label: 'Verify' },
-            { icon: '✓', label: 'Verdict' },
-          ].map((step, idx, arr) => (
-            <div key={step.label} className="stepper-item">
-              <div className="stepper-pill">
-                <span className="stepper-icon">{step.icon}</span>
-                <span className="stepper-label">{step.label}</span>
-              </div>
-              {idx < arr.length - 1 && <span className="stepper-arrow">›</span>}
+      <div className={`page-wrap${stage === 'idle' ? ' idle-page-wrap' : ''}`}>
+        {/* ── Top Brand Bar ── */}
+        <div className="top-brand-bar">
+          <div className="top-brand-left">
+            <div className="brand-badge-pill">
+              <span className="brand-dot" />
+              <span className="brand-name">TruthLens AI</span>
+              <span className="brand-sep">•</span>
+              <span className="brand-tag">FORENSICS ENGINE v2.4</span>
             </div>
-          ))}
+            <button
+              type="button"
+              className="system-health-pill"
+              onClick={() => setShowHealthModal(true)}
+              title="Inspect live system diagnostics & API circuit breakers"
+            >
+              <span className="live-status-dot" />
+              <span>System: Operational</span>
+              <span className="system-health-ping">[Diagnostics ↗]</span>
+            </button>
+          </div>
+          <div className="top-brand-right">
+            <PixelAnimationControls />
+          </div>
         </div>
-      </header>
 
-      {/* ── Idle: URL Input ── */}
-      {stage === 'idle' && (
-        <div className="url-section">
+      {/* ── Hero & Main Content ── */}
+      {stage === 'idle' ? (
+        <div className="idle-hero-center">
+          <header className="site-header">
+            <div className="site-header-badge">
+              <span className="badge-sparkle">✦</span>
+              RESEARCH-GRADE FORENSICS • EXPLAINABLE AI • OSINT
+            </div>
+            <h1 className="hero-title">
+              Multimodal Video Forensics
+              <span className="gradient-highlight">
+                <span className="title-amp">&amp;</span> Fact-Checking Engine
+              </span>
+            </h1>
+            <p className="hero-subtitle">
+              Detect deepfakes, inspect voice &amp; video forensics, mine <span style={{ whiteSpace: 'nowrap' }}>cross-platform</span> OSINT signals,
+              and verify claims with explainable AI verdicts.
+            </p>
+            <div className="pipeline-stepper-ribbon">
+              {[
+                { icon: '↓', label: 'Ingest' },
+                { icon: '◉', label: 'Transcribe' },
+                { icon: '◈', label: 'Claims' },
+                { icon: '◇', label: 'Forensics' },
+                { icon: '▦', label: 'Data Mining' },
+                { icon: '⊘', label: 'Verify' },
+                { icon: '✓', label: 'Verdict' },
+              ].map((step, idx, arr) => (
+                <div key={step.label} className="stepper-item">
+                  <div className="stepper-pill">
+                    <span className="stepper-icon">{step.icon}</span>
+                    <span className="stepper-label">{step.label}</span>
+                  </div>
+                  {idx < arr.length - 1 && <span className="stepper-arrow">›</span>}
+                </div>
+              ))}
+            </div>
+          </header>
+
+          <div className="url-section">
           <form onSubmit={handleSubmit} className="url-form-container">
             <div className="url-command-bar">
-              <div className="url-platform-icon" title="YouTube Video Input">
+              <div className="url-platform-icon" title="YouTube Shorts Input">
                 <span className="yt-badge">▶</span>
               </div>
               <input
                 id="video-url-input"
                 type="url"
                 className="url-input"
-                placeholder="Paste YouTube video or Shorts URL to analyze…"
+                placeholder="Paste YouTube Shorts URL only (e.g., https://www.youtube.com/shorts/…)…"
                 value={url}
                 onChange={e => setUrl(e.target.value)}
                 required
@@ -1253,81 +1364,124 @@ export default function Home() {
               )}
               <button id="analyze-btn" type="submit" className="btn-analyze">
                 <span className="btn-sparkle">⚡</span>
-                <span>Analyze Video</span>
+                <span>Analyze Shorts</span>
               </button>
             </div>
           </form>
 
-          {/* Curated Verification Case Studies (Instant Evaluator Inspection) */}
-          <div className="demo-cases-ribbon">
-            <div className="demo-cases-header">
-              <span className="demo-sparkle">✨</span>
-              <span className="demo-title">Curated Multimodal Case Studies</span>
-              <span className="demo-sub">• Zero-Latency Instant Evaluation</span>
-            </div>
-            <div className="demo-cards-row">
-              <div className="demo-card" onClick={() => loadDemoCase('deepfake_scam')}>
-                <div className="demo-card-top">
-                  <span className="demo-card-icon">⚡</span>
-                  <span className="demo-card-badge" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>Deepfake 94%</span>
-                </div>
-                <div className="demo-card-title">Elon Musk AI Scam &amp; Crypto Bait</div>
-                <div className="demo-card-desc">Synthetic voice cloning, ELA warping, and advance-fee scam veto.</div>
+          {/* Unified Sleek Showcase Console */}
+          <div className="glass idle-showcase-box">
+            <div className="showcase-nav-bar">
+              <div className="showcase-tabs">
+                <button
+                  type="button"
+                  className={`showcase-tab ${idleTab === 'cases' ? 'active' : ''}`}
+                  onClick={() => setIdleTab('cases')}
+                >
+                  <span className="tab-sparkle">✨</span>
+                  <span>Instant Case Studies</span>
+                  <span className="tab-pill-count">3</span>
+                </button>
+                <button
+                  type="button"
+                  className={`showcase-tab ${idleTab === 'pipeline' ? 'active' : ''}`}
+                  onClick={() => setIdleTab('pipeline')}
+                >
+                  <span className="tab-sparkle">🔬</span>
+                  <span>Verification Pipeline</span>
+                  <span className="tab-pill-count">6 Stages</span>
+                </button>
               </div>
-
-              <div className="demo-card" onClick={() => loadDemoCase('science_myths')}>
-                <div className="demo-card-top">
-                  <span className="demo-card-icon">🧬</span>
-                  <span className="demo-card-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Verified 89%</span>
-                </div>
-                <div className="demo-card-title">Venom Genes &amp; Human Empathy</div>
-                <div className="demo-card-desc">PNAS genomics &amp; Anthrozoös psychology peer-reviewed validation.</div>
-              </div>
-
-              <div className="demo-card" onClick={() => loadDemoCase('geopolitical_disinfo')}>
-                <div className="demo-card-top">
-                  <span className="demo-card-icon">🛡️</span>
-                  <span className="demo-card-badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>Manipulated 96%</span>
-                </div>
-                <div className="demo-card-title">Recycled Combat Video &amp; Bot CGI</div>
-                <div className="demo-card-desc">ARMA 3 video game CGI recycled as live combat with IFCN debunks.</div>
+              <div className="showcase-badge-meta">
+                {idleTab === 'cases' ? (
+                  <span className="showcase-meta-tag">⚡ Zero-Latency Instant Inspection</span>
+                ) : (
+                  <span className="showcase-meta-tag">🛡️ Automated Multimodal Intelligence</span>
+                )}
               </div>
             </div>
-          </div>
 
-          {/* Capabilities Grid */}
-          <div className="glass how-it-works">
-            <div className="how-it-works-header">
-              <span className="how-it-works-title">Forensics &amp; Fact-Checking Pipeline</span>
-              <span className="how-it-works-subtitle">6-stage automated verification pipeline</span>
-            </div>
-            <div className="module-grid">
-              {MODULE_CARDS.map(m => (
-                <div key={m.name} className="module-card">
-                  <div className="module-card-top">
-                    <div className="module-icon">{m.icon}</div>
-                    <div className="module-name">{m.name}</div>
+            {idleTab === 'cases' ? (
+              <div className="demo-cards-row">
+                <div className="demo-card" onClick={() => loadDemoCase('deepfake_scam')} title="Click to inspect this real deepfake case">
+                  <div className="demo-card-top">
+                    <span className="demo-card-icon">⚡</span>
+                    <span className="demo-card-badge" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>Deepfake 94%</span>
                   </div>
-                  <div className="module-desc">{m.desc}</div>
+                  <div className="demo-card-title">Elon Musk AI Scam &amp; Crypto Bait</div>
+                  <div className="demo-card-desc">Synthetic voice cloning, ELA warping, and advance-fee scam veto.</div>
+                  <div className="demo-card-action">Inspect Case ↗</div>
                 </div>
-              ))}
-            </div>
-            {/* Capability tags */}
-            <div className="floating-stats-row">
-              {[
-                { label: 'Groq LLM', sublabel: 'Llama 3.3 70B' },
-                { label: 'Live Search', sublabel: 'DuckDuckGo Engine' },
-                { label: 'Data Mining', sublabel: 'Pattern & Outliers' },
-                { label: 'Forensics', sublabel: 'Deepfake & Voice' },
-              ].map(s => (
-                <div key={s.label} className="floating-stat">
-                  <span className="stat-label">{s.label}</span>
-                  <span className="stat-sublabel">{s.sublabel}</span>
+
+                <div className="demo-card" onClick={() => loadDemoCase('science_myths')} title="Click to inspect this peer-reviewed science fact-check">
+                  <div className="demo-card-top">
+                    <span className="demo-card-icon">🧬</span>
+                    <span className="demo-card-badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>Verified 89%</span>
+                  </div>
+                  <div className="demo-card-title">Venom Genes &amp; Human Empathy</div>
+                  <div className="demo-card-desc">PNAS genomics &amp; Anthrozoös psychology peer-reviewed validation.</div>
+                  <div className="demo-card-action">Inspect Case ↗</div>
                 </div>
-              ))}
-            </div>
+
+                <div className="demo-card" onClick={() => loadDemoCase('geopolitical_disinfo')} title="Click to inspect this video CGI manipulation case">
+                  <div className="demo-card-top">
+                    <span className="demo-card-icon">🛡️</span>
+                    <span className="demo-card-badge" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>Manipulated 96%</span>
+                  </div>
+                  <div className="demo-card-title">Recycled Combat Video &amp; Bot CGI</div>
+                  <div className="demo-card-desc">ARMA 3 video game CGI recycled as live combat with IFCN debunks.</div>
+                  <div className="demo-card-action">Inspect Case ↗</div>
+                </div>
+              </div>
+            ) : (
+              <div className="showcase-pipeline-view">
+                <div className="module-grid">
+                  {MODULE_CARDS.map(m => (
+                    <div key={m.name} className="module-card">
+                      <div className="module-card-top">
+                        <div className="module-icon">{m.icon}</div>
+                        <div className="module-name">{m.name}</div>
+                      </div>
+                      <div className="module-desc">{m.desc}</div>
+                    </div>
+                  ))}
+                </div>
+                {/* Capability tags */}
+                <div className="floating-stats-row">
+                  {[
+                    { label: 'Groq LLM', sublabel: 'Llama 3.3 70B' },
+                    { label: 'Live Search', sublabel: 'DuckDuckGo Engine' },
+                    { label: 'Data Mining', sublabel: 'Pattern & Outliers' },
+                    { label: 'Forensics', sublabel: 'Deepfake & Voice' },
+                  ].map(s => (
+                    <div key={s.label} className="floating-stat">
+                      <span className="stat-label">{s.label}</span>
+                      <span className="stat-sublabel">{s.sublabel}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
+      </div>
+      ) : (
+        <header className="site-header">
+          <div className="site-header-badge">
+            <span className="badge-sparkle">✦</span>
+            RESEARCH-GRADE FORENSICS • EXPLAINABLE AI • OSINT
+          </div>
+          <h1 className="hero-title">
+            Multimodal Video Forensics
+            <span className="gradient-highlight">
+              <span className="title-amp">&amp;</span> Fact-Checking Engine
+            </span>
+          </h1>
+          <p className="hero-subtitle">
+            Detect deepfakes, inspect voice &amp; video forensics, mine <span style={{ whiteSpace: 'nowrap' }}>cross-platform</span> OSINT signals,
+            and verify claims with explainable AI verdicts.
+          </p>
+        </header>
       )}
 
       {/* ── Error States ── */}
@@ -1639,23 +1793,14 @@ export default function Home() {
                     ⚠ Misleading ({realClaims.filter(c => c.verdict?.label === 'misleading').length})
                   </button>
                 )}
-                {realClaims.filter(c => c.verdict?.label === 'unverifiable').length > 0 && (
-                  <button
-                    type="button"
-                    className={`filter-pill${claimFilter === 'unverifiable' ? ' active' : ''}`}
-                    onClick={() => setClaimFilter('unverifiable')}
-                    style={claimFilter === 'unverifiable' ? { background: 'rgba(100,116,139,0.25)', borderColor: '#64748b', color: '#94a3b8' } : {}}
-                  >
-                    ? Unverified ({realClaims.filter(c => c.verdict?.label === 'unverifiable').length})
-                  </button>
-                )}
               </div>
             </div>
           )}
 
           {(() => {
             const filtered = realClaims.filter(item => {
-              if (claimFilter !== 'all' && item.verdict?.label !== claimFilter) return false;
+              const itemLabel = item.verdict?.label;
+              if (claimFilter !== 'all' && itemLabel !== claimFilter) return false;
               if (claimSearch.trim()) {
                 const q = claimSearch.toLowerCase();
                 const textMatch = item.claim?.normalized_text?.toLowerCase().includes(q) ||
@@ -1722,7 +1867,7 @@ export default function Home() {
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
-      <MistralCatFooter />
+      {stage !== 'idle' && <MistralCatFooter />}
     </>
   );
 }

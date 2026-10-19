@@ -41,8 +41,10 @@ if sys.platform == "win32":
 
 try:
     from backend.routers.jobs import router as jobs_router
+
 except ModuleNotFoundError:  # pragma: no cover - support running main.py directly from backend/
     from routers.jobs import router as jobs_router
+
 from contextlib import asynccontextmanager
 
 
@@ -74,10 +76,23 @@ app.add_middleware(
 app.include_router(jobs_router, prefix="/jobs")
 
 
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "TruthLens AI Multimodal Verification Engine", "version": "1.0"}
+
+
+@app.get("/health")
+def health():
+    import datetime
+    return {"status": "ok", "service": "TruthLens AI", "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+
 def build_claim_verdicts_for_segments(video_url: str, segments: list, detected_language: str = "en") -> list:
     """
-    Mock implementation for tests: simulates claim extraction and verdict checking
-    by splitting compound sentences into simple claims and returning true/false verdicts.
+    Build timestamped, literal transcript claims for callers that provide segments.
+    This compatibility helper does not perform retrieval, so it deliberately
+    returns UNVERIFIED rather than inventing a fact-check result.
     """
     results = []
     import uuid
@@ -104,11 +119,11 @@ def build_claim_verdicts_for_segments(video_url: str, segments: list, detected_l
             verdict = {
                 "id": str(uuid.uuid4()),
                 "claim_id": str(claim.id),
-                "label": "true" if "blue" in clause.lower() or "freezes" in clause.lower() else "false",
-                "confidence": 0.9,
+                "label": "unverified",
+                "confidence": 0.2,
                 "evidence": [],
-                "reasoning": "Mocked validation reasoning.",
-                "summary": "Mocked validation summary.",
+                "reasoning": "No independent evidence retrieval was requested for this compatibility helper.",
+                "summary": "Unverified: transcript text alone is not evidence.",
                 "context": clause,
             }
             results.append({
@@ -118,7 +133,7 @@ def build_claim_verdicts_for_segments(video_url: str, segments: list, detected_l
                 "related_platforms": [],
             })
             
-    return results
+    return results  # Server reload trigger
 
 
 if __name__ == "__main__":

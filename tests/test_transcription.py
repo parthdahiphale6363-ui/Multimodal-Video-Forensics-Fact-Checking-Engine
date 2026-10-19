@@ -238,4 +238,4 @@ def test_build_claim_verdicts_for_segments_extracts_all_claims():
     assert len(results) == 2
     assert results[0]["claim"]["normalized_text"].startswith("The sky")
     assert results[1]["claim"]["normalized_text"].startswith("Water")
-    assert {item["verdict"]["label"] for item in results}.issubset({"true", "false"})
+    assert {item["verdict"]["label"] for item in results} == {"unverified"}

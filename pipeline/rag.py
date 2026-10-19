@@ -370,9 +370,21 @@ def run_rag_pipeline(
     wiki_query = _build_wikipedia_query(claim)
     print(f"[rag] Target subject query: '{wiki_query}'")
 
-    # Fetch additional trusted sources
-    wiki_results = _fetch_wikipedia(wiki_query, claim, max_results=3)
-    fc_results = _fetch_google_factcheck(wiki_query, claim=claim)
+    # Fetch additional trusted sources concurrently
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        wiki_future = executor.submit(_fetch_wikipedia, wiki_query, claim, max_results=3)
+        fc_future = executor.submit(_fetch_google_factcheck, wiki_query, claim=claim)
+        try:
+            wiki_results = wiki_future.result(timeout=15)
+        except Exception as e:
+            print(f"[rag] Wikipedia fetch thread failed: {e}")
+            wiki_results = []
+        try:
+            fc_results = fc_future.result(timeout=15)
+        except Exception as e:
+            print(f"[rag] Google Fact Check thread failed: {e}")
+            fc_results = []
 
     print(f"[rag] Wikipedia: {len(wiki_results)} relevant pages | FactCheck: {len(fc_results)} results")
 

@@ -1,0 +1,290 @@
+{
+  "info": {
+    "name": "TruthLens AI - Forensics & Fact-Checking Engine",
+    "description": "End-to-end API collection for TruthLens AI multimodal forensics and fact-checking platform.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "job_id",
+      "value": "demo-deepfake-elon-scam"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. System Health Diagnostics",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "health"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Health status present\", function () { var json = pm.response.json(); pm.expect(json.status).to.be.oneOf([\"ok\", \"degraded\"]); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Curated Demo Cases",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/demo-cases",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "demo-cases"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Scenarios loaded\", function () { var json = pm.response.json(); pm.expect(json).to.have.property(\"deepfake_scam\"); pm.expect(json).to.have.property(\"science_myths\"); pm.expect(json).to.have.property(\"geopolitical_disinfo\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Create Video Verification Job",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"video_url\": \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/jobs",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Job created (200 OK)\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Job has valid UUID\", function () { var json = pm.response.json(); pm.expect(json).to.have.property(\"id\"); pm.collectionVariables.set(\"job_id\", json.id); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Poll Job Status",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Status field exists\", function () { var json = pm.response.json(); pm.expect(json).to.have.property(\"status\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Get Video Transcript",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/transcript",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "transcript"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Get Claims & Verdicts Matrix",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/claims",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "claims"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Get Deepfake & Forensic Analysis",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/forensics",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "forensics"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Get OSINT & IFCN Evidence",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/osint",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "osint"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Get Data Mining Narrative Patterns",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/dm_report",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "dm_report"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Classification category is forensic\", function () { var json = pm.response.json(); if (json && json.classification) { pm.expect(json.classification.category).to.not.equal(\"Unverified\"); } });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Export Cryptographic Markdown Dossier",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/export?format=markdown",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "export"],
+          "query": [
+            {
+              "key": "format",
+              "value": "markdown"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Dossier contains TruthLens header\", function () { pm.expect(pm.response.text()).to.include(\"TruthLens AI\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Export Signed JSON Dossier",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/jobs/{{job_id}}/export?format=json",
+          "host": ["{{baseUrl}}"],
+          "path": ["jobs", "{{job_id}}", "export"],
+          "query": [
+            {
+              "key": "format",
+              "value": "json"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Dossier has audit metadata\", function () { var json = pm.response.json(); pm.expect(json).to.have.property(\"dossier_metadata\"); pm.expect(json.dossier_metadata).to.have.property(\"audit_hash\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}

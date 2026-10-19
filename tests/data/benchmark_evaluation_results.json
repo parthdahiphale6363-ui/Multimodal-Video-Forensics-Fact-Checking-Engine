@@ -1,0 +1,421 @@
+{
+  "dataset_name": "TruthLens-Bench-100",
+  "total_cases": 100,
+  "total_passages": 90,
+  "stance_accuracy": 0.5222,
+  "irrelevant_false_positive_rate": 0.0,
+  "verdict_accuracy": 0.62,
+  "missing_evidence_safety_rate": 1.0,
+  "expected_calibration_error": 0.2943,
+  "brier_score": 0.2846,
+  "dedup_works": true,
+  "category_metrics": {
+    "health_medicine": {
+      "total": 12,
+      "correct": 12
+    },
+    "everyday_physics": {
+      "total": 11,
+      "correct": 10
+    },
+    "climate_environment": {
+      "total": 11,
+      "correct": 7
+    },
+    "history_geography": {
+      "total": 11,
+      "correct": 5
+    },
+    "technology_ai": {
+      "total": 11,
+      "correct": 4
+    },
+    "geopolitics_conflict": {
+      "total": 11,
+      "correct": 5
+    },
+    "pseudoscience_conspiracy": {
+      "total": 11,
+      "correct": 7
+    },
+    "economics_finance": {
+      "total": 11,
+      "correct": 4
+    },
+    "adversarial_logic": {
+      "total": 11,
+      "correct": 8
+    }
+  },
+  "verdict_confusion": {
+    "false": {
+      "false": 25,
+      "misleading": 15,
+      "true": 2,
+      "unverified": 0
+    },
+    "true": {
+      "true": 18,
+      "misleading": 20,
+      "false": 1,
+      "unverified": 0
+    },
+    "misleading": {
+      "misleading": 19,
+      "true": 0,
+      "false": 0,
+      "unverified": 0
+    },
+    "unverified": {
+      "true": 0,
+      "false": 0,
+      "misleading": 0,
+      "unverified": 0
+    }
+  },
+  "failed_cases_count": 38,
+  "failed_cases": [
+    {
+      "id": "eval-019",
+      "claim": "Quantum entanglement allows instantaneous transmission of classical data bits across interstellar distances.",
+      "category": "everyday_physics",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-028",
+      "claim": "Solar panel manufacturing produces more carbon emissions over its lifecycle than burning coal.",
+      "category": "climate_environment",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-029",
+      "claim": "Antarctica has gained net ice mass continuously without any loss in Western glaciers over the last decade.",
+      "category": "climate_environment",
+      "ground_truth": "false",
+      "predicted": "true",
+      "confidence": 0.406,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-032",
+      "claim": "Ocean acidification is driven by the absorption of atmospheric CO2 forming carbonic acid.",
+      "category": "climate_environment",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-034",
+      "claim": "Methane is a more potent greenhouse gas per molecule than carbon dioxide over a 20-year timescale.",
+      "category": "climate_environment",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-037",
+      "claim": "The Titanic sank after colliding with an iceberg in the North Atlantic in April 1912.",
+      "category": "history_geography",
+      "ground_truth": "true",
+      "predicted": "false",
+      "confidence": 0.421,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-038",
+      "claim": "Cleopatra was born closer in time to the Moon landing than to the construction of the Great Pyramid of Giza.",
+      "category": "history_geography",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-039",
+      "claim": "Mount Everest is the highest mountain peak above sea level on Earth.",
+      "category": "history_geography",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-040",
+      "claim": "The United States purchased Alaska from France in the Louisiana Purchase.",
+      "category": "history_geography",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-042",
+      "claim": "Napoleon Bonaparte was unusually short and measured less than 4 feet tall.",
+      "category": "history_geography",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-045",
+      "claim": "Australia was the first sovereign nation to grant all women the right to run for national parliament in 1902.",
+      "category": "history_geography",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-048",
+      "claim": "Deepfake speech synthesis models can replicate vocal timbre from a few seconds of clean audio reference.",
+      "category": "technology_ai",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-049",
+      "claim": "Quantum computers have officially broken all 2048-bit RSA encryption worldwide as of early 2024.",
+      "category": "technology_ai",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-050",
+      "claim": "Bitcoin relies on a proof-of-work consensus algorithm using SHA-256 cryptographic hashing.",
+      "category": "technology_ai",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-051",
+      "claim": "Putting your smartphone inside a kitchen microwave for 10 seconds wirelessly recharges the lithium battery.",
+      "category": "technology_ai",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-052",
+      "claim": "Large Language Models operate by predicting the probability distribution of subsequent tokens.",
+      "category": "technology_ai",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-053",
+      "claim": "Tesla has launched an automated quantum financial giveaway distributing $10,000 to every viewer.",
+      "category": "technology_ai",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-055",
+      "claim": "Error Level Analysis (ELA) identifies differing JPEG compression levels across edited image regions.",
+      "category": "technology_ai",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-057",
+      "claim": "The United Nations was established in 1945 following the conclusion of World War II.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-059",
+      "claim": "The North Atlantic Treaty Organization (NATO) was originally founded in 1949 with 12 founding members.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-060",
+      "claim": "The European Union is comprised of 50 member states all using the Swiss Franc currency.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-061",
+      "claim": "Certified IFCN fact-checkers must adhere to a strict nonpartisanship and transparency code of principles.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-064",
+      "claim": "The Geneva Conventions govern the humanitarian treatment of wounded soldiers and prisoners of war.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-066",
+      "claim": "A diplomatic telegram from 1917 known as the Zimmermann Telegram influenced US entry into World War I.",
+      "category": "geopolitics_conflict",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-069",
+      "claim": "The world elite are blood-drinking shapeshifting reptilian aliens from the Alpha Draconis star system.",
+      "category": "pseudoscience_conspiracy",
+      "ground_truth": "false",
+      "predicted": "true",
+      "confidence": 0.359,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-071",
+      "claim": "Crystals have documented molecular resonance frequencies that reliably cure viral hepatitis when held against the skin.",
+      "category": "pseudoscience_conspiracy",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-076",
+      "claim": "Bermuda Triangle disappearances occur at a statistically higher rate than any other comparable ocean shipping corridor.",
+      "category": "pseudoscience_conspiracy",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-077",
+      "claim": "Ancient Mayan stone calendars predicted the absolute physical end of planet Earth on December 21, 2012.",
+      "category": "pseudoscience_conspiracy",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-079",
+      "claim": "The United States Federal Reserve was created by the Federal Reserve Act in December 1913.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-081",
+      "claim": "Hyperinflation in Weimar Germany in 1923 reached monthly inflation rates exceeding 30,000 percent.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-082",
+      "claim": "The US dollar has been backed by an equivalent weight in physical gold at the Federal Reserve since 1971.",
+      "category": "economics_finance",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-083",
+      "claim": "The Gross Domestic Product (GDP) measures the monetary market value of all final goods and services produced in a country.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-084",
+      "claim": "Sweden completely banned the use of physical cash by law in January 2020.",
+      "category": "economics_finance",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.359,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-086",
+      "claim": "The Gini coefficient is an established statistical measure of economic inequality within a population.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-088",
+      "claim": "Deflation is a general decrease in the price level of goods and services in an economy.",
+      "category": "economics_finance",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-090",
+      "claim": "It is not true that water is not composed of hydrogen and oxygen.",
+      "category": "adversarial_logic",
+      "ground_truth": "true",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-092",
+      "claim": "The exact total number of grains of sand on all Earth beaches was counted by hand to be 4,812,940,211,003.",
+      "category": "adversarial_logic",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    },
+    {
+      "id": "eval-094",
+      "claim": "Drinking boiling hydrochloric acid every morning strengthens tooth enamel.",
+      "category": "adversarial_logic",
+      "ground_truth": "false",
+      "predicted": "misleading",
+      "confidence": 0.25,
+      "evidence_count": 1
+    }
+  ]
+}

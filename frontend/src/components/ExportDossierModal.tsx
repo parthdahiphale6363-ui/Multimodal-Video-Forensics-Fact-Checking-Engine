@@ -102,8 +102,25 @@ export const ExportDossierModal: React.FC<ExportDossierModalProps> = ({
     }
   };
 
-  const handleDownloadMd = () => {
+  const handleDownloadMd = async () => {
     setDownloading(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/export?format=markdown`);
+      if (res.ok) {
+        const mdText = await res.text();
+        const blob = new Blob([mdText], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `TruthLens_Audit_${jobId}.md`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setDownloading(false);
+        return;
+      }
+    } catch {}
     const md = buildMarkdown();
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -117,7 +134,24 @@ export const ExportDossierModal: React.FC<ExportDossierModalProps> = ({
     setDownloading(false);
   };
 
-  const handleDownloadJson = () => {
+  const handleDownloadJson = async () => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/export?format=json`);
+      if (res.ok) {
+        const data = await res.json();
+        const jsonStr = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `TruthLens_Dossier_${jobId}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+    } catch {}
     const jsonStr = JSON.stringify(reportData, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -148,6 +182,9 @@ export const ExportDossierModal: React.FC<ExportDossierModalProps> = ({
         borderRadius: '20px',
         width: '100%',
         maxWidth: '560px',
+        maxHeight: '90vh',
+        display: 'flex',
+        flexDirection: 'column',
         boxShadow: '0 25px 60px rgba(0, 0, 0, 0.5), 0 0 30px rgba(99, 102, 241, 0.2)',
         overflow: 'hidden',
       }}>
@@ -187,7 +224,7 @@ export const ExportDossierModal: React.FC<ExportDossierModalProps> = ({
         </div>
 
         {/* Content */}
-        <div style={{ padding: '1.5rem' }}>
+        <div style={{ padding: '1.5rem', overflowY: 'auto' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '1.25rem' }}>
             Export the complete verification report including visual/audio deepfake markers, IFCN certified citations, BM25 evidence sources, and constitutional veto logs.
           </p>

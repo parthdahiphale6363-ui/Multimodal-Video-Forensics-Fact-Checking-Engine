@@ -144,11 +144,11 @@ def _call_groq_extract(client, model: str, full_transcript: str, strict: bool = 
             model=m,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Video Transcript:\n\n{full_transcript[:10000]}"}
+                {"role": "user", "content": f"Video Transcript:\n\n{full_transcript[:8000]}"}
             ],
             temperature=0.0,
-            max_tokens=800,
-            timeout=45,
+            max_tokens=1800,
+            timeout=60,
         )
         raw = ""
         if response.choices:
@@ -183,18 +183,61 @@ def deduplicate_claims_with_llm(claims: List[Dict[str, str]]) -> List[Dict[str, 
     return unique
 
 
+# Conversational/filler patterns that are never independently fact-checkable
+_NON_FACTUAL_PATTERNS = re.compile(
+    r"^(?:"
+    r"(?:but\s+)?i(?:'ll|\s+will|\s+am\s+going\s+to|\s+want\s+to)?\s+(?:tell|show|explain|share|talk|discuss|let\s+you\s+know)\b"
+    r"|(?:let(?:'s|us|\s+me))\s+(?:tell|show|explore|start|talk|look|see|discuss|begin|find|check)\b"
+    r"|(?:so|well|okay|now|alright|basically|essentially|actually|anyway|you\s+know|you\s+see)\s*[,.]?\s*$"
+    r"|(?:first\s+of\s+all|second(?:ly)?|third(?:ly)?|next|also|additionally|furthermore|moreover|however|therefore),?\s*$"
+    r"|(?:as\s+(?:you|we)\s+(?:can\s+see|know|mentioned|said|discussed))\b"
+    r"|(?:what(?:'s|\s+is)\s+(?:interesting|amazing|surprising|crazy|incredible|shocking|fascinating)\s+(?:is|here)\b)"
+    r"|(?:in\s+(?:this|today's|our)\s+(?:video|episode|segment|part|section))\b"
+    r"|(?:stay\s+tuned|don't\s+forget\s+to|like\s+and\s+subscribe|hit\s+the\s+bell)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_BROAD_STOP = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "ok", "okay", "yes", "no",
+    "i", "you", "we", "they", "he", "she", "it", "me", "us", "him", "her",
+    "my", "our", "your", "their", "this", "that", "these", "those",
+    "will", "would", "could", "should", "may", "might", "can", "shall",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from", "as",
+    "and", "but", "or", "not", "so", "just", "now", "also", "very",
+    "tell", "show", "know", "see", "let", "go", "get",
+}
+
+
 def clean_and_filter_claims(claims: List[Dict[str, str]]) -> List[Dict[str, str]]:
     valid = []
-    stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "ok", "okay", "yes", "no"}
     for item in claims:
         claim_text = (item.get("claim") or "").strip()
         if not claim_text:
             continue
+
         words = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", claim_text)]
-        if len(words) < 3 or len(claim_text) < 10:
+        if len(words) < 4 or len(claim_text) < 12:
             continue
-        if all(w in stop_words for w in words):
+
+        # Reject if all words are generic stop words
+        if all(w in _BROAD_STOP for w in words):
             continue
+
+        # Reject conversational filler openers
+        if _NON_FACTUAL_PATTERNS.search(claim_text):
+            print(f"[claims] Rejected non-factual filler: \"{claim_text[:80]}\"")
+            continue
+
+        # Reject if >65% of meaningful words are stop words (very low information density)
+        meaningful = [w for w in words if len(w) > 2]
+        if meaningful:
+            stop_ratio = sum(1 for w in meaningful if w in _BROAD_STOP) / len(meaningful)
+            if stop_ratio > 0.65 and len(words) < 8:
+                print(f"[claims] Rejected low-information claim (stop ratio={stop_ratio:.0%}): \"{claim_text[:80]}\"")
+                continue
+
         valid.append(item)
     return valid
 
@@ -210,28 +253,64 @@ def extract_claims_with_llm(full_transcript: str) -> Optional[List[Dict[str, str
 
     model = get_llm_model()
     
+    def _repair_truncated_json(text: str) -> str:
+        """Attempt to close a truncated JSON object so it can be parsed."""
+        if not text or not text.strip():
+            return text
+        t = text.strip()
+        # Close any unclosed string: count unescaped quotes
+        in_string = False
+        i = 0
+        while i < len(t):
+            c = t[i]
+            if c == '\\' and in_string:
+                i += 2
+                continue
+            if c == '"':
+                in_string = not in_string
+            i += 1
+        if in_string:
+            t += '"'  # close the string
+        # Remove trailing comma before closing bracket
+        t = re.sub(r",\s*$", "", t)
+        # Count unmatched braces and brackets
+        opens = t.count('{') - t.count('}')
+        arr_opens = t.count('[') - t.count(']')
+        t += ']' * max(0, arr_opens) + '}' * max(0, opens)
+        return t
+
     def parse_claims(raw_text):
         cleaned = _strip_markdown_fences(raw_text)
-        try:
-            # strict=False allows control characters like newlines in strings
-            result = json.loads(cleaned, strict=False)
-            if isinstance(result, dict) and "claims" in result:
-                return clean_and_filter_claims(result["claims"])
-            elif isinstance(result, list):
-                return clean_and_filter_claims(result)
-        except json.JSONDecodeError as e:
-            # Try to repair common JSON issues (like trailing commas)
+        for attempt_text in [cleaned, _repair_truncated_json(cleaned)]:
+            if not attempt_text:
+                continue
             try:
-                # Basic fix for trailing commas in objects or arrays
-                repaired = re.sub(r",\s*([\]}])", r"\1", cleaned)
-                result = json.loads(repaired, strict=False)
+                result = json.loads(attempt_text, strict=False)
                 if isinstance(result, dict) and "claims" in result:
-                    return clean_and_filter_claims(result["claims"])
+                    found = clean_and_filter_claims(result["claims"])
+                    if found is not None:
+                        return found
                 elif isinstance(result, list):
-                    return clean_and_filter_claims(result)
+                    found = clean_and_filter_claims(result)
+                    if found is not None:
+                        return found
             except json.JSONDecodeError:
                 pass
-            print(f"[extract_claims_with_llm] Parse error: {e}. Raw: {raw_text[:300]}")
+            # Trailing-comma repair
+            try:
+                repaired = re.sub(r",\s*([\]}])", r"\1", attempt_text)
+                result = json.loads(repaired, strict=False)
+                if isinstance(result, dict) and "claims" in result:
+                    found = clean_and_filter_claims(result["claims"])
+                    if found is not None:
+                        return found
+                elif isinstance(result, list):
+                    found = clean_and_filter_claims(result)
+                    if found is not None:
+                        return found
+            except json.JSONDecodeError:
+                pass
+        print(f"[extract_claims_with_llm] Parse error. Raw (first 300): {raw_text[:300]}")
         return None
 
     # First attempt
@@ -247,17 +326,63 @@ def extract_claims_with_llm(full_transcript: str) -> Optional[List[Dict[str, str
     if filtered is not None:
         return deduplicate_claims_with_llm(filtered)
 
+    # Heuristic fallback: pick sentences that look factual (contain numbers, named entities, or domain terms)
     print("[extract_claims_with_llm] Both attempts failed. Using heuristic fallback.")
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', full_transcript) if len(s.strip().split()) > 4]
+    _FACTUAL_SIGNAL = re.compile(
+        r'(?:\d[\d.,]*%?|\$[\d.]+|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|'
+        r'\b(?:causes?|produces?|generates?|contains?|found|discovered|proven|'
+        r'studies?|research|evidence|scientists?|percent|million|billion|years?)\b)',
+        re.IGNORECASE
+    )
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', full_transcript) if len(s.strip().split()) >= 5]
     fallback_claims = []
     for s in sentences:
         if len(fallback_claims) >= 3:
             break
-        fallback_claims.append({"claim": s, "context": s})
-    
+        if _FACTUAL_SIGNAL.search(s):
+            fallback_claims.append({"claim": s, "context": s})
+    # If no factual sentences found, just take the first 2 non-trivial ones
+    if not fallback_claims:
+        for s in sentences[:5]:
+            if len(fallback_claims) >= 2:
+                break
+            words = s.split()
+            if len(words) >= 6:
+                fallback_claims.append({"claim": s, "context": s})
+
     if fallback_claims:
         return clean_and_filter_claims(fallback_claims)
     return []
+
+
+def decompose_compound_claim(claim_text: str) -> List[str]:
+    """
+    Decomposes a compound factual assertion into atomic propositions.
+    Example:
+      'Drinking lemon water cures cancer and governments are hiding this data.'
+      -> ['Drinking lemon water cures cancer.', 'Governments are hiding this data.']
+    """
+    text = (claim_text or "").strip()
+    if not text:
+        return []
+
+    # 1. Sentence boundary splitting
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 8]
+    if len(sentences) > 1:
+        return [s.rstrip(".!?") + "." for s in sentences[:4]]
+
+    # 2. Semicolon splitting
+    if ";" in text:
+        parts = [p.strip() for p in text.split(";") if len(p.strip().split()) >= 3]
+        if len(parts) > 1:
+            return [p.rstrip(".!?") + "." for p in parts[:4]]
+
+    # 3. Coordinating conjunctions between independent clauses (e.g. ', and ', ' and ', ', while ')
+    conj_parts = re.split(r"(?:,\s*|\s+)(?:and|while|whereas|as well as)\s+", text, flags=re.IGNORECASE)
+    if len(conj_parts) > 1 and all(len(p.split()) >= 4 for p in conj_parts):
+        return [p.strip().rstrip(".!?") + "." for p in conj_parts[:4]]
+
+    return [text.rstrip(".!?") + "."]
 
 
 # ─── Overall Verdict Aggregation ──────────────────────────────────────────────
@@ -280,16 +405,29 @@ def compute_overall_verdict(
         return {
             "overall_verdict": "No factual claims to verify",
             "verdict_breakdown": {"true": 0, "false": 0, "misleading": 0, "unverifiable": 0, "total": 0},
-            "final_verdict_category": "Unverified",
+            "final_verdict_category": "Misleading",
         }
 
     counts = {"true": 0, "false": 0, "misleading": 0, "unverifiable": 0}
     for item in claim_items:
-        label = item["verdict"]["label"].lower()
+        raw_label = str(item.get("verdict", {}).get("label", "")).lower()
+        label = {
+            "supported": "true",
+            "verified": "true",
+            "contradicted": "false",
+            "partially_supported": "misleading",
+            "ambiguous": "misleading",
+            "unverifiable": "misleading",
+            "unverified": "misleading",
+            "partial": "misleading",
+            "true": "true",
+            "false": "false",
+            "misleading": "misleading",
+        }.get(raw_label, "misleading")
         if label in counts:
             counts[label] += 1
         else:
-            counts["unverifiable"] += 1
+            counts["misleading"] += 1
 
     total = sum(counts.values())
     counts["total"] = total
@@ -297,7 +435,7 @@ def compute_overall_verdict(
     t = counts["true"]
     f = counts["false"]
     m = counts["misleading"]
-    u = counts["unverifiable"]
+    u = counts.get("unverifiable", 0)
 
     # ── Signals from Multi-Modal Modules ──
     dm_category = None
@@ -318,8 +456,12 @@ def compute_overall_verdict(
     if forensics_report:
         deepfake_prob = forensics_report.get("deepfake_probability", 0.0)
         voice_clone_prob = forensics_report.get("voice_clone_probability", 0.0)
-        is_synthetic = forensics_report.get("is_synthetic", False) or deepfake_prob >= 0.55 or voice_clone_prob >= 0.60
         forensics_veto = forensics_report.get("forensics_veto", {})
+        is_synthetic = bool(
+            forensics_veto.get("veto")
+            or forensics_report.get("is_synthetic", False)
+            or (forensics_report.get("detector_status") != "not_available" and (deepfake_prob >= 0.55 or voice_clone_prob >= 0.60))
+        )
 
     recycled_footage = False
     google_factcheck_debunk = False
@@ -374,10 +516,10 @@ def compute_overall_verdict(
     # ── Base Layer: Claim Fact-Checking Synthesis ──
     else:
         if total == 0:
-            final_category = "Unverified"
+            final_category = "Misleading"
             overall = "No factual claims to verify"
 
-        elif t == total and f == 0 and m == 0 and u == 0:
+        elif t == total and f == 0 and m == 0:
             final_category = "Genuine"
             overall = "True"
 
@@ -389,29 +531,17 @@ def compute_overall_verdict(
             final_category = "Misleading"
             overall = "Misleading"
 
-        elif u == total:
-            final_category = "Unverified"
-            overall = "Unverifiable — Insufficient Evidence"
-
         elif f > 0 or m > 0:
             if t == 0:
                 final_category = "Misleading"
-                overall = "Misleading / False"
+                overall = "Misleading"
             else:
                 final_category = "Manipulated"
-                overall = "Mixed — Contains False or Misleading Claims"
-
-        elif t > 0 and u > 0 and f == 0 and m == 0:
-            if t >= u:
-                final_category = "Likely Genuine"
-                overall = "Likely True (some claims unverified)"
-            else:
-                final_category = "Unverified"
-                overall = "Partially Verifiable — Insufficient Evidence for Most Claims"
+                overall = "Misleading — Mixed Claim Evidence"
 
         else:
-            final_category = "Unverified"
-            overall = "Unverifiable"
+            final_category = "Misleading"
+            overall = "Misleading"
 
         # ── Calibration Guard: Downgrade if DM or OSINT contradictions are elevated ──
         if final_category in ("Genuine", "Likely Genuine"):
@@ -464,8 +594,9 @@ def _build_evidence_items(search_result: Dict, verdict_label: str) -> List[Dict]
         stance = evidence.get("stance")
         supports = evidence.get("supports_claim")
         if supports is None:
-            supports = True if stance == "supports" else False if stance == "contradicts" else (verdict_label == "true")
+            supports = True if stance == "supports" else False if stance == "contradicts" else None
             
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         evidence_items.append({
             "source_url": source_url,
             "source_title": source_title,
@@ -474,14 +605,21 @@ def _build_evidence_items(search_result: Dict, verdict_label: str) -> List[Dict]
             "domain_trust_tier": evidence.get("domain_trust_tier", 3),
             "snippet": evidence.get("snippet") or evidence.get("excerpt") or "No evidence snippet available.",
             "relevant_passage": evidence.get("relevant_passage") or evidence.get("snippet", ""),
+            "quote": evidence.get("quote") or evidence.get("relevant_passage") or evidence.get("snippet", ""),
+            "quote_location": evidence.get("quote_location"),
+            "quote_verified": evidence.get("quote_verified", False),
+            "publisher": evidence.get("publisher") or domain,
+            "retrieval_timestamp": evidence.get("retrieval_timestamp") or now_iso,
+            "credibility_limitation": evidence.get("credibility_limitation"),
             "relevance_score": evidence.get("relevance_score", 0.75),
             "publication_date": evidence.get("publication_date", datetime.datetime.now().strftime("%Y-%m-%d")),
             "supports_claim": supports,
-            "stance": stance or ("supports" if supports else "contradicts"),
+            "stance": stance or ("supports" if supports is True else "contradicts" if supports is False else "neutral"),
             "is_independent": evidence.get("is_independent", True),
             "explanation": evidence.get("explanation", ""),
         })
     return evidence_items
+
 
 
 # ─── Score Fusion ─────────────────────────────────────────────────────────────
@@ -592,24 +730,37 @@ def process_video(job: Job):
         ]
         full_transcript = "\n".join([s.text.strip() for s in result.segments if getattr(s, "text", None)])
 
-        # ── Step 3: Forensics Analysis ──
+        # ── Step 3 & 4: Forensics Analysis and Claim Extraction CONCURRENTLY ──
         job.status = JobStatus.FORENSICS_ANALYSIS
         job.progress_percent = 30.0
         job.updated_at = datetime.datetime.now(datetime.timezone.utc)
-        print(f"[process_video] Running forensics analysis...")
+        print(f"[process_video] Running forensics analysis and claim extraction concurrently...")
 
         audio_path = getattr(result, "audio_path", None)
-        forensics_report = run_forensics_pipeline(full_transcript, job.video_url, audio_path=audio_path)
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        with ThreadPoolExecutor(max_workers=2) as stage1_executor:
+            fut_forensics = stage1_executor.submit(
+                run_forensics_pipeline, full_transcript, job.video_url, audio_path=audio_path
+            )
+            fut_claims = stage1_executor.submit(
+                extract_claims_with_llm, full_transcript
+            )
+
+            try:
+                forensics_report = fut_forensics.result(timeout=120)
+            except Exception as e:
+                print(f"[process_video] Forensics pipeline failed: {e}")
+                forensics_report = run_forensics_pipeline(full_transcript, job.video_url, audio_path=None)
+
+            try:
+                extracted = fut_claims.result(timeout=120)
+            except Exception as e:
+                print(f"[process_video] Claim extraction failed: {e}")
+                extracted = None
+
         forensics_db[str(job.id)] = forensics_report
         job.forensics_report = forensics_report
-
-        # ── Step 4: LLM Claim Extraction ──
-        job.status = JobStatus.EXTRACTING_CLAIMS
-        job.progress_percent = 40.0
-        job.updated_at = datetime.datetime.now(datetime.timezone.utc)
-        print(f"[process_video] Extracting key claims from full transcript via LLM...")
-
-        extracted = extract_claims_with_llm(full_transcript)
 
         if extracted is None:
             job.status = JobStatus.EXTRACTION_FAILED
@@ -631,19 +782,26 @@ def process_video(job: Job):
 
         print(f"[process_video] Extracted {len(extracted)} claims: {[c['claim'][:60] for c in extracted]}")
 
-        # ── Step 5: Fact-check each claim SEQUENTIALLY (avoids Groq rate limits) ──
+        # ── Step 5 & 6: Parallel Claim Verification & Overlapped OSINT ──
         job.status = JobStatus.VERIFYING
-        job.progress_percent = 55.0
+        job.progress_percent = 50.0
         job.updated_at = datetime.datetime.now(datetime.timezone.utc)
 
-        claim_items = []
+        # Launch OSINT pipeline concurrently in the background (uses extracted claims + forensics)
+        print(f"[process_video] Launching OSINT in parallel with claim verification...")
+        osint_executor = ThreadPoolExecutor(max_workers=1)
+        fut_osint = osint_executor.submit(
+            run_osint_pipeline, full_transcript, job.video_url, extracted, forensics_report
+        )
+
         detected_language = result.detected_source_language or "en"
 
-        for idx, extracted_claim in enumerate(extracted):
+        def _verify_claim_worker(idx_and_item):
+            idx, extracted_claim = idx_and_item
             claim_text = extracted_claim.get("claim", "").strip()
             context_text = extracted_claim.get("context", "").strip()
             if not claim_text:
-                continue
+                return None
 
             claim = Claim(
                 source_video_id=job.video_url,
@@ -656,36 +814,14 @@ def process_video(job: Job):
 
             print(f"[process_video] Fact-checking claim {idx+1}/{len(extracted)}: {claim_text[:70]}...")
             try:
-                from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    fut = ex.submit(gather_evidence_for_claim, claim_text, full_transcript)
-                    search_result = fut.result(timeout=120)
-            except FuturesTimeout:
-                print(f"[process_video] Claim {idx+1} timed out after 120s")
-                search_result = {
-                    "label": "misleading",
-                    "confidence": 0.40,
-                    "reasoning": "Verification timed out after 120 seconds. Automated evaluation indicates inconclusive evidence.",
-                    "summary": "Verification timed out — claim marked as misleading/inconclusive.",
-                    "evidence": [],
-                    "fact_check_summary": {
-                        "searches_run": 1,
-                        "sources_found": 0,
-                        "sources_accepted": 0,
-                        "sources_blocked": 0,
-                        "consensus_score": 0.0,
-                        "llm_rounds": 1,
-                        "critic_rejections": 0,
-                    },
-                    "search_runs": [],
-                }
+                search_result = gather_evidence_for_claim(claim_text, full_transcript)
             except Exception as e:
                 print(f"[process_video] Claim {idx+1} verification error: {e}")
                 search_result = {
-                    "label": "misleading",
-                    "confidence": 0.40,
-                    "reasoning": f"Verification error: {e}. Evaluated based on available context.",
-                    "summary": "Verification encountered an issue — marked as misleading.",
+                    "label": "unverified",
+                    "confidence": 0.0,
+                    "reasoning": f"Verification error: {e}. Insufficient evidence to establish veracity.",
+                    "summary": "Verification encountered an upstream error — marked as UNVERIFIED.",
                     "evidence": [],
                     "fact_check_summary": {
                         "searches_run": 1,
@@ -698,9 +834,8 @@ def process_video(job: Job):
                     },
                     "search_runs": [],
                 }
-            verdict_label = search_result.get("label", "misleading")
-            if verdict_label in ("unverifiable", "unverified"):
-                verdict_label = "misleading"
+
+            verdict_label = search_result.get("label", "unverified")
             evidence_items = _build_evidence_items(search_result, verdict_label)
 
             fact_check_summary = search_result.get("fact_check_summary") or {
@@ -740,6 +875,25 @@ def process_video(job: Job):
                 }
             ]
 
+            # Decompose into atomic sub-claims
+            atomic_claims = decompose_compound_claim(claim_text)
+            atomic_assessments = []
+            for ac in atomic_claims:
+                atomic_assessments.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "atomic_claim": ac,
+                    "verdict": verdict_label,
+                    "reasoning": search_result.get("summary") or search_result.get("reasoning", ""),
+                    "confidence": search_result.get("confidence", 0.75),
+                    "supporting_quote_ids": [e["source_url"] for e in evidence_items if e.get("supports_claim") is True],
+                    "contradicting_quote_ids": [e["source_url"] for e in evidence_items if e.get("supports_claim") is False],
+                })
+
+            canonical_hash = search_result.get("canonical_hash")
+            unresolved = []
+            if verdict_label == "misleading" and "unverified" in search_result.get("reasoning", "").lower():
+                unresolved.append("External sources lacked sufficient direct evidence to confirm or refute this claim.")
+
             verdict = {
                 "id": str(uuid.uuid4()),
                 "claim_id": str(claim.id),
@@ -749,6 +903,9 @@ def process_video(job: Job):
                 "reasoning": search_result.get("reasoning", ""),
                 "summary": search_result.get("summary", f"Claim marked as {verdict_label.upper()} based on web search evidence."),
                 "context": context_text,
+                "atomic_assessments": atomic_assessments,
+                "canonical_hash": canonical_hash,
+                "unresolved_uncertainties": unresolved,
                 "search_runs": search_runs,
                 "llm_checks": llm_checks,
                 "fact_check_summary": fact_check_summary,
@@ -762,19 +919,54 @@ def process_video(job: Job):
                 "related_count": 0,
                 "related_platforms": [],
             }
-            claim_items.append(res)
-            claims_verdicts_db[str(job.id)] = list(claim_items)
-            publish_job_event(str(job.id), "claim", res)
-            job.progress_percent = 55.0 + ((idx + 1) / len(extracted)) * 20.0
-            job.updated_at = datetime.datetime.now(datetime.timezone.utc)
-            print(f"[process_video] Claim {idx+1}/{len(extracted)} done — {verdict_label}")
+            return (idx, res, verdict_label)
 
-        # ── Step 6: OSINT with extracted claims ──
+        # Run claim verification with bounded worker pool (max_workers=3)
+        max_claim_workers = min(len(extracted), 3)
+        verified_results = [None] * len(extracted)
+
+        with ThreadPoolExecutor(max_workers=max_claim_workers) as claim_pool:
+            from concurrent.futures import as_completed
+            futures_map = {
+                claim_pool.submit(_verify_claim_worker, (i, extracted_claim)): i
+                for i, extracted_claim in enumerate(extracted)
+            }
+            completed_count = 0
+            for fut in as_completed(futures_map):
+                orig_idx = futures_map[fut]
+                completed_count += 1
+                try:
+                    res_tuple = fut.result()
+                    if res_tuple:
+                        _, res, verdict_label = res_tuple
+                        verified_results[orig_idx] = res
+                        print(f"[process_video] Claim {orig_idx+1}/{len(extracted)} done — {verdict_label}")
+                        publish_job_event(str(job.id), "claim", res)
+                except Exception as e:
+                    print(f"[process_video] Worker error on claim {orig_idx+1}: {e}")
+
+                # Update live progress
+                job.progress_percent = 50.0 + (completed_count / len(extracted)) * 30.0
+                job.updated_at = datetime.datetime.now(datetime.timezone.utc)
+                # Keep claims_verdicts_db up to date with completed claims
+                claims_verdicts_db[str(job.id)] = [r for r in verified_results if r is not None]
+
+        claim_items = [r for r in verified_results if r is not None]
+        claims_verdicts_db[str(job.id)] = claim_items
+
+        # ── Step 6: Await Overlapped OSINT Pipeline ──
         job.status = JobStatus.OSINT_COLLECTION
-        job.progress_percent = 78.0
+        job.progress_percent = 82.0
         job.updated_at = datetime.datetime.now(datetime.timezone.utc)
-        print(f"[process_video] Running OSINT with extracted claims...")
-        osint_report = run_osint_pipeline(full_transcript, job.video_url, claim_items, forensics_report)
+        print(f"[process_video] Finalizing OSINT report...")
+        try:
+            osint_report = fut_osint.result(timeout=60)
+        except Exception as e:
+            print(f"[process_video] OSINT collection failed or timed out: {e}")
+            osint_report = run_osint_pipeline(full_transcript, job.video_url, claim_items, forensics_report)
+        finally:
+            osint_executor.shutdown(wait=False)
+
         osint_db[str(job.id)] = osint_report
         job.osint_report = osint_report
 
