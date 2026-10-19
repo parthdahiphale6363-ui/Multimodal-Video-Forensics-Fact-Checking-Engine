@@ -111,7 +111,7 @@ def get_llm_model() -> str:
     provider_pref = os.getenv("LLM_PROVIDER", "").strip().lower()
     if provider_pref != "groq" and os.getenv("MISTRAL_API_KEY", "").strip() and time.time() >= _mistral_cooldown_until:
         return os.getenv("MISTRAL_MODEL", "mistral-small-latest")
-    return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    return os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 
 def get_fallback_llm_model() -> str:
@@ -120,11 +120,11 @@ def get_fallback_llm_model() -> str:
     provider_pref = os.getenv("LLM_PROVIDER", "").strip().lower()
     if provider_pref != "groq" and os.getenv("MISTRAL_API_KEY", "").strip() and time.time() >= _mistral_cooldown_until:
         return os.getenv("MISTRAL_FALLBACK_MODEL", "mistral-small-latest")
-    return os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
+    return os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-120b")
 
 
 def get_groq_model() -> str:
-    return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    return os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 
 def _parse_retry_seconds(error_msg: str) -> float:
@@ -157,15 +157,23 @@ def _throttle_groq():
         _last_groq_call = time.time()
 
 
-def _create_completion(client: Any, kwargs: dict, max_retries: int = 5) -> Any:
+def _is_daily_quota_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    return "tokens per day" in msg or "tpd" in msg or "requests per day" in msg or "rpd" in msg
+
+
+def _create_completion(client: Any, kwargs: dict, max_retries: int = 2) -> Any:
     """Call Groq with throttling and automatic 429 retry."""
     for attempt in range(max_retries):
         _throttle_groq()
         try:
             return client.chat.completions.create(**kwargs)
         except Exception as e:
+            if _is_daily_quota_error(e):
+                # Daily quota exhausted — do not retry on this key/model, fail immediately to rotate
+                raise e
             if _is_rate_limit_error(e) and attempt < max_retries - 1:
-                wait = _parse_retry_seconds(str(e)) or (2 ** attempt * 3 + 2)
+                wait = _parse_retry_seconds(str(e)) or (2 ** attempt * 2 + 1)
                 print(f"[llm] Rate limited — waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})...")
                 time.sleep(wait)
                 continue
@@ -213,11 +221,21 @@ def call_llm_with_fallback(client: Any, **kwargs) -> Any:
     run_kwargs = kwargs.copy()
     run_kwargs["model"] = primary_model
 
+    def _finalize(res: Any, key_used: Optional[str]) -> Any:
+        if key_used:
+            manager.record_groq_success(key_used)
+        if res and getattr(res, "choices", None):
+            msg = res.choices[0].message
+            content = getattr(msg, "content", "")
+            if not content and hasattr(msg, "reasoning"):
+                reasoning = getattr(msg, "reasoning", "")
+                if reasoning:
+                    msg.content = reasoning
+        return res
+
     try:
         result = _create_completion(client, run_kwargs)
-        if current_key:
-            manager.record_groq_success(current_key)
-        return result
+        return _finalize(result, current_key)
     except Exception as e:
         if _is_auth_error(e):
             # Mark this key as permanently invalid and try next key
@@ -228,14 +246,11 @@ def call_llm_with_fallback(client: Any, **kwargs) -> Any:
             if next_client and next_key != current_key:
                 try:
                     result = _create_completion(next_client, run_kwargs, max_retries=3)
-                    manager.record_groq_success(next_key)
-                    return result
+                    return _finalize(result, next_key)
                 except Exception as e2:
                     print(f"[llm] Next key also failed: {e2}")
-                    raise e2
-            raise e
-
-        if _is_rate_limit_error(e):
+                    pass
+        elif _is_rate_limit_error(e):
             # Rate limit — mark current key cooling, rotate to next key
             cooldown = _parse_retry_seconds(str(e)) or 60.0
             if current_key:
@@ -246,42 +261,28 @@ def call_llm_with_fallback(client: Any, **kwargs) -> Any:
             if next_client and next_key != current_key:
                 print(f"[llm] Rotating to next Groq key after rate limit...")
                 try:
-                    result = _create_completion(next_client, run_kwargs, max_retries=3)
-                    manager.record_groq_success(next_key)
-                    return result
+                    result = _create_completion(next_client, run_kwargs, max_retries=2)
+                    return _finalize(result, next_key)
                 except Exception as e2:
-                    if _is_rate_limit_error(e2):
-                        # All keys rate limited — wait for shortest cooldown
-                        wait = _parse_retry_seconds(str(e)) or 15.0
-                        print(f"[llm] All keys rate limited — waiting {wait:.1f}s...")
-                        time.sleep(wait)
-                        final_client, final_key = get_llm_client_with_key()
-                        if final_client:
-                            try:
-                                result = _create_completion(final_client, run_kwargs, max_retries=3)
-                                manager.record_groq_success(final_key)
-                                return result
-                            except Exception as e3:
-                                raise e3
-                    raise e2
-            else:
-                # No other key available — wait and retry same key
-                wait = _parse_retry_seconds(str(e)) or 15.0
-                print(f"[llm] Single key rate limited — final retry after {wait:.1f}s...")
-                time.sleep(wait)
-                try:
-                    return _create_completion(client, run_kwargs, max_retries=3)
-                except Exception as e2:
-                    raise e2
+                    pass
 
-        # Non-rate-limit, non-auth error — try fallback model
-        print(f"[llm] Primary model ({primary_model}) failed: {e}. Trying fallback ({fallback_model})...")
+        # Try fallback model (e.g. qwen/qwen3.8-27b has a distinct quota pool)
+        print(f"[llm] Primary model ({primary_model}) unavailable: {e}. Trying fallback ({fallback_model})...")
         fallback_kwargs = kwargs.copy()
         fallback_kwargs["model"] = fallback_model
         try:
-            return _create_completion(client, fallback_kwargs, max_retries=3)
+            result = _create_completion(client, fallback_kwargs, max_retries=2)
+            return _finalize(result, current_key)
         except Exception as e2:
             print(f"[llm] Fallback model ({fallback_model}) also failed: {e2}")
+            # Try next key with fallback model
+            next_client, next_key = get_llm_client_with_key()
+            if next_client:
+                try:
+                    result = _create_completion(next_client, fallback_kwargs, max_retries=2)
+                    return _finalize(result, next_key)
+                except Exception as e3:
+                    raise e3
             raise e2
 
 

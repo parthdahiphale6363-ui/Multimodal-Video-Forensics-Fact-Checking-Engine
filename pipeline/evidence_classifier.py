@@ -445,11 +445,11 @@ def classify_evidence_items(
         if llm_stance_map and url in llm_stance_map:
             l_info = llm_stance_map[url]
             l_stance_str = str(l_info.get("stance", "")).lower().strip()
-            if l_stance_str == "supports":
+            if l_stance_str in ("supports", "supported"):
                 stance = EvidenceStance.SUPPORTS
-            elif l_stance_str in ("contradicts", "refutes"):
+            elif l_stance_str in ("contradicts", "refutes", "refuted", "debunked", "contradicted"):
                 stance = EvidenceStance.CONTRADICTS
-            elif l_stance_str in ("mixed", "partial", "partially_supports"):
+            elif l_stance_str in ("mixed", "partial", "partially_supports", "partially_supported"):
                 stance = EvidenceStance.PARTIALLY_SUPPORTS
             elif l_stance_str == "neutral":
                 stance = EvidenceStance.NEUTRAL
@@ -462,10 +462,17 @@ def classify_evidence_items(
             elif l_info.get("supports_claim") is False:
                 # Distinguish does-not-support (insufficient/neutral) from active contradiction
                 p_stance, _, _ = classify_passage_stance(claim_text, title, snippet, url, rel_score)
-                stance = EvidenceStance.CONTRADICTS if p_stance == EvidenceStance.CONTRADICTS else EvidenceStance.INSUFFICIENT
+                stance = (
+                    EvidenceStance.CONTRADICTS
+                    if p_stance == EvidenceStance.CONTRADICTS
+                    or any(term in str(l_info.get("explanation", "")).lower() for term in ["refute", "contradict", "debunk", "false", "myth", "disprov"])
+                    else EvidenceStance.INSUFFICIENT
+                )
             else:
                 stance = EvidenceStance.INSUFFICIENT
             rel_score = float(l_info.get("relevance_score") or rel_score)
+            if stance in (EvidenceStance.SUPPORTS, EvidenceStance.CONTRADICTS) and rel_score < 0.65:
+                rel_score = max(rel_score, 0.70)
             explanation = l_info.get("explanation") or l_info.get("reason", "Evaluated by LLM fact-checker.")
         else:
             stance, rel_score, explanation = classify_passage_stance(claim_text, title, snippet, url, rel_score)

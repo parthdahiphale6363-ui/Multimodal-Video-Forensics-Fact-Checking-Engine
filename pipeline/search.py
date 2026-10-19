@@ -862,6 +862,14 @@ def _run_llm_reasoning(
         if ev_url in real_url_map:
             base = real_url_map[ev_url].copy()
             base["supports_claim"] = ev.get("supports_claim", None)
+            # Retain LLM-classified stance if provided
+            llm_stance = ev.get("stance")
+            if not llm_stance and base["supports_claim"] is True:
+                llm_stance = "supports"
+            elif not llm_stance and base["supports_claim"] is False:
+                llm_stance = "contradicts"
+            if llm_stance:
+                base["stance"] = str(llm_stance).lower()
             # Retain original authentic snippet to prevent model-fabricated quotes
             original_snippet = base.get("snippet", "")
             base["snippet"] = original_snippet
@@ -1111,19 +1119,28 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
 
         final_label = raw_label
 
+        has_llm_support = any(
+            ev.get("supports_claim") is True or str(ev.get("stance", "")).lower() in ("supports", "supported")
+            for ev in result.get("evidence", [])
+        )
+        has_llm_contradict = any(
+            ev.get("supports_claim") is False or str(ev.get("stance", "")).lower() in ("contradicts", "refutes", "refuted", "debunked")
+            for ev in result.get("evidence", [])
+        )
+
         # RULE 1: Never label a claim TRUE without sufficient direct evidence
         if final_label == "true":
-            if valid_contradicts and not valid_supports:
+            if (valid_contradicts or has_llm_contradict) and not (valid_supports or has_llm_support):
                 final_label = "false"
                 result["summary"] = "The claim is refuted by verifiable counterevidence."
-            elif valid_contradicts and valid_supports:
+            elif (valid_contradicts or has_llm_contradict) and (valid_supports or has_llm_support):
                 if len(valid_contradicts) >= len(valid_supports) or len(valid_contradicts) >= 2:
                     final_label = "misleading"
                     result["summary"] = "The claim is disputed with conflicting findings across credible sources."
             elif has_med_conflict:
                 final_label = "misleading"
                 result["summary"] = "Medical guidelines or clinical evidence conflict with or do not substantiate this health claim."
-            elif not valid_supports:
+            elif not valid_supports and not has_llm_support:
                 final_label = "misleading"
                 result["summary"] = "Unverified: retrieved sources contain related context but lack direct evidence confirming this claim. Missing evidence does not prove the claim false."
                 result["reasoning"] = (
@@ -1139,10 +1156,10 @@ def gather_evidence_for_claim(claim_text: str, transcript_text: str = "") -> Dic
 
         # RULE 3: Contradicted label consistency check
         elif final_label == "false":
-            if not valid_contradicts and valid_supports:
+            if not valid_contradicts and not has_llm_contradict and (valid_supports or has_llm_support):
                 final_label = "true"
                 result["summary"] = "The claim is supported by factual and scientific evidence."
-            elif not valid_contradicts and not valid_supports:
+            elif not valid_contradicts and not has_llm_contradict and not valid_supports and not has_llm_support:
                 final_label = "misleading"
                 result["summary"] = "Unverified: insufficient direct counterevidence to definitively refute this claim. Missing evidence does not prove the claim false."
 
