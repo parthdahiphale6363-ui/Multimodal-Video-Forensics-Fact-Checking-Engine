@@ -133,46 +133,37 @@ def test_real_vs_synthetic_media_forensics():
 def test_live_backend_api_e2e_workflow():
     """Test full asynchronous job submission and retrieval over HTTP API."""
     print("\n--- Test 3: Live Backend API End-to-End Workflow ---")
-    base_url = "http://127.0.0.1:8000"
-    
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    client = TestClient(app)
+
     # 1. Health check
-    req = urllib.request.urlopen(f"{base_url}/health")
-    assert req.status == 200, f"Backend not reachable at {base_url}"
-    print(f"Backend is healthy at {base_url}")
-    
+    res = client.get("/health")
+    assert res.status_code == 200, f"Backend health returned {res.status_code}"
+    print("Backend is healthy at /health")
+
     # 2. Submit test job to /jobs endpoint
-    payload = json.dumps({
-        "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    }).encode("utf-8")
-    
-    submit_req = urllib.request.Request(
-        f"{base_url}/jobs",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    submit_res = urllib.request.urlopen(submit_req)
-    assert submit_res.status in (200, 201, 202), f"Job submission failed: {submit_res.status}"
-    
-    data = json.loads(submit_res.read().decode())
+    submit_res = client.post("/jobs", json={"video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+    assert submit_res.status_code in (200, 201, 202), f"Job submission failed: {submit_res.status_code}"
+
+    data = submit_res.json()
     job_id = data.get("id") or data.get("job_id")
     print(f"Submitted test job ID: {job_id}")
     assert job_id is not None, "Must receive job id in response"
-    
+
     # 3. Poll for status
-    status = data.get("status")
-    print(f"Initial job status: {status}")
-    
-    poll_req = urllib.request.urlopen(f"{base_url}/jobs/{job_id}")
-    assert poll_req.status == 200
-    job_info = json.loads(poll_req.read().decode())
+    poll_res = client.get(f"/jobs/{job_id}")
+    assert poll_res.status_code == 200
+    job_info = poll_res.json()
     print(f"Verified /jobs/{job_id} endpoint: status={job_info.get('status')}")
-    
+
     # 4. Check sub-resource endpoints (must not 404)
     for sub in ["claims", "forensics", "transcript", "dm_report"]:
-        sub_req = urllib.request.urlopen(f"{base_url}/jobs/{job_id}/{sub}")
-        assert sub_req.status == 200, f"Endpoint /jobs/{job_id}/{sub} returned status {sub_req.status}"
+        sub_res = client.get(f"/jobs/{job_id}/{sub}")
+        assert sub_res.status_code == 200, f"Endpoint /jobs/{job_id}/{sub} returned status {sub_res.status_code}"
         print(f"Verified /jobs/{job_id}/{sub} returned 200 OK")
-        
+
     print(">>> Live backend API end-to-end integration workflow PASSED.")
 
 
