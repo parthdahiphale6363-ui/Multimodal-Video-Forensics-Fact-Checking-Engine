@@ -25,19 +25,19 @@
 
 ---
 
-## 🏆 Hackathon Judges' Quick-Start Evaluation Guide
+## 🌐 Live Interactive Platform & Instant Inspection
 
-> [!IMPORTANT]
-> **Evaluating under tight hackathon time constraints?** You can test TruthLens AI end-to-end in **under 60 seconds** without creating an account or running local code!
+> [!TIP]
+> **Experience TruthLens AI in Production**: Test the fully functional system end-to-end on Railway with zero setup or credentials required at [**multimodal-video-forensics-fact-checking-engine.up.railway.app**](https://multimodal-video-forensics-fact-checking-engine.up.railway.app/).
 
-### ⏱️ 60-Second Evaluation Walkthrough
+### ⚡ Instant Inspection Workflow
 1. **Launch the Live Deployment**: Navigate to [**multimodal-video-forensics-fact-checking-engine.up.railway.app**](https://multimodal-video-forensics-fact-checking-engine.up.railway.app/).
-2. **Inspect Instant Demo Cases (0 Latency)**: On the homepage hero, click on any of the pre-loaded real-world case studies:
-   - ⚡ **Elon Musk AI Scam & Crypto Bait**: Experience how synthetic voice cloning and scam template matching trigger an immediate **Constitutional Veto** ($P_{\text{deepfake}} = 94\% \rightarrow \mathbf{FALSE}$).
-   - 🧬 **Venom Genes & Human Empathy**: See how colloquial speech is parsed into scientific queries corroborated by **PNAS genomics** and **Anthrozoös psychology** peer-reviewed literature ($\mathbf{TRUE}$, 89% Confidence).
-   - 🛡️ **Recycled Combat Video & Bot CGI**: Observe how ARMA 3 video game combat footage passed off as live warfare is caught via **IFCN Signatory debunks** and temporal drift ($\mathbf{MISLEADING}$, 96% Severity).
-3. **Analyze Live YouTube Shorts**: Paste any YouTube Shorts URL (e.g. news clips, scientific claims, political commentary) and watch the **8-Stage Forensic Pipeline** execute in real time with synchronized timestamp seeking `[▶ 00:03]`.
-4. **Audit Cryptographic Dossier**: Click **"Export Dossier"** to review the SHA-256 canonical verification hash, full chain-of-custody citations, and raw agent query logs.
+2. **Explore Pre-Loaded Real-World Case Studies (Zero Latency)**: On the interactive dashboard, click any of the built-in investigative scenarios:
+   - ⚡ **Elon Musk AI Scam & Crypto Bait**: Demonstrates how synthetic voice cloning and advance-fee scam template matching trigger an immediate **Constitutional Sovereign Veto** ($P_{\text{deepfake}} = 94\% \rightarrow \mathbf{FALSE}$).
+   - 🧬 **Venom Genes & Human Empathy**: Demonstrates epistemic transcript normalization into formal scientific queries verified against **PNAS genomics** and **Anthrozoös psychology** peer-reviewed research ($\mathbf{TRUE}$, 89% Confidence).
+   - 🛡️ **Recycled Combat Video & Bot CGI**: Demonstrates detection of ARMA 3 video game combat footage passed off as live warfare via **IFCN Signatory debunks** and temporal drift ($\mathbf{MISLEADING}$, 96% Severity).
+3. **Analyze Live YouTube Shorts**: Paste any YouTube Shorts URL to observe the **8-Stage Forensic Pipeline** execute in real time with synchronized timestamp seeking `[▶ 00:03]`.
+4. **Audit Cryptographic Dossier**: Export tamper-evident SHA-256 signed Markdown and structured JSON dossiers complete with citation chains of custody and raw agent logs.
 
 ---
 
