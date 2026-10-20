@@ -19,9 +19,15 @@
 ### 🌐 **[👉 Open Live Interactive Web Application 👈](https://multimodal-video-forensics-fact-checking-engine.up.railway.app/)**
 **Live Production URL:** `https://multimodal-video-forensics-fact-checking-engine.up.railway.app/`
 
-*An enterprise-grade autonomous multimodal intelligence system that cross-examines video streams, acoustic spectrograms, OSINT feeds, and certified IFCN databases to detect deepfakes, expose recycled footage, and deliver mathematically grounded fact-checking verdicts.*
+*An enterprise-grade autonomous multimodal intelligence system purpose-built for YouTube Shorts (`https://www.youtube.com/shorts/...`) that cross-examines video streams, acoustic spectrograms, OSINT feeds, and certified IFCN databases to detect deepfakes, expose recycled footage, and deliver mathematically grounded fact-checking verdicts.*
 
 </div>
+
+---
+
+> [!IMPORTANT]
+> ⚠️ **Supported Input Notice (YouTube Shorts Only)**: TruthLens AI **strictly supports YouTube Shorts URLs only** (e.g., `https://www.youtube.com/shorts/VIDEO_ID`).
+> **Any other links are NOT supported** — including standard long-form YouTube videos (`/watch?v=`), YouTube playlists, Vimeo, TikTok, Instagram Reels, Twitter/X, or direct video file uploads. The ingestion pipeline actively validates and strictly rejects non-Shorts links.
 
 ---
 
@@ -36,7 +42,7 @@
    - ⚡ **Elon Musk AI Scam & Crypto Bait**: Demonstrates how synthetic voice cloning and advance-fee scam template matching trigger an immediate **Constitutional Sovereign Veto** ($P_{\text{deepfake}} = 94\% \rightarrow \mathbf{FALSE}$).
    - 🧬 **Venom Genes & Human Empathy**: Demonstrates epistemic transcript normalization into formal scientific queries verified against **PNAS genomics** and **Anthrozoös psychology** peer-reviewed research ($\mathbf{TRUE}$, 89% Confidence).
    - 🛡️ **Recycled Combat Video & Bot CGI**: Demonstrates detection of ARMA 3 video game combat footage passed off as live warfare via **IFCN Signatory debunks** and temporal drift ($\mathbf{MISLEADING}$, 96% Severity).
-3. **Analyze Live YouTube Shorts**: Paste any YouTube Shorts URL to observe the **8-Stage Forensic Pipeline** execute in real time with synchronized timestamp seeking `[▶ 00:03]`.
+3. **Analyze Live YouTube Shorts (YouTube Shorts Only)**: Paste a valid YouTube Shorts URL (e.g., `https://www.youtube.com/shorts/VIDEO_ID`) to observe the **8-Stage Forensic Pipeline** execute in real time with synchronized timestamp seeking `[▶ 00:03]`. *(Note: Other link formats such as regular YouTube `/watch`, Vimeo, or other social platforms are not supported and are blocked by the URL gate).*
 4. **Audit Cryptographic Dossier**: Export tamper-evident SHA-256 signed Markdown and structured JSON dossiers complete with citation chains of custody and raw agent logs.
 
 ---
@@ -105,7 +111,7 @@ flowchart TD
     classDef veto fill:#450a0a,stroke:#f87171,stroke-width:2px,color:#fff;
     classDef output fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#fff;
 
-    A["🎬 YouTube Shorts URL / Direct Video Stream"]:::input --> B["⚡ yt-dlp Video Ingestion & Audio Demuxing"]
+    A["🎬 YouTube Shorts URL Only (Other Links Rejected)"]:::input --> B["⚡ yt-dlp Video Ingestion & Audio Demuxing"]
     B --> C["🎙️ Groq Whisper Large v3 (Fast Audio Transcription)"]:::ai
     C --> D["🧠 Groq Llama 3.3 70B (Epistemic Claim Normalization)"]:::ai
 
@@ -172,7 +178,7 @@ When critical threat vectors are detected, the system executes a **Sovereign Con
 
 ---
 
-## 🔬 Built-In Instant Case Studies (For Judges)
+## 🔬 Built-In Empirical Case Studies
 
 The application includes three zero-latency pre-compiled case studies demonstrating the full spectrum of multimodal forensics:
 
@@ -408,7 +414,7 @@ Import `TruthLens_AI_Postman_Collection.json` into Postman to inspect all endpoi
 
 | HTTP Method | Endpoint | Description |
 |:---|:---|:---|
-| `POST` | `/jobs` | Ingests a video URL, initializes background forensic workers, and returns job ID. |
+| `POST` | `/jobs` | Ingests a **YouTube Shorts URL only** (e.g., `https://www.youtube.com/shorts/VIDEO_ID`), initializes background forensic workers, and returns job ID. (Other links are strictly rejected). |
 | `GET` | `/jobs/{id}` | Retrieves real-time pipeline status, progress percentage, and execution stage. |
 | `GET` | `/jobs/{id}/claims` | Returns parsed factual claims, verification stances, and verbatim web citations. |
 | `GET` | `/jobs/{id}/forensics` | Returns FFprobe acoustic telemetry, silence burst distribution, and deepfake probability. |
