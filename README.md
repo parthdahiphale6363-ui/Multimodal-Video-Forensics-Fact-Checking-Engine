@@ -26,6 +26,7 @@ Unlike traditional naive text-matching fact checkers, TruthLens features a **Con
 ## 🚀 Deploy to Railway
 
 TruthLens AI is pre-configured for seamless cloud deployment on [Railway](https://railway.app) using native Dockerfiles and dynamic `$PORT` routing.
+LIVE DEMO - https://multimodal-video-forensics-fact-checking-engine.up.railway.app/
 
 ### Architecture Overview on Railway
 
